@@ -48,7 +48,33 @@ Applying the drop takes ~30 seconds in the World Editor:
 3. **Object Editor** → *File → Import Object Settings...* → pick `import.w3o`.
 4. Save. Done — the editor performed every write with its own code.
 
-## Standalone Windows build (no Node.js required)
+## Graphical app (easiest)
+
+**WC3ObjectPorter.exe** is a standalone desktop app (no installation, no
+Node.js):
+
+- **Add any number of sources**: maps/campaigns to take existing custom
+  objects from, and plain **asset folders** (e.g. unzipped Hive Workshop
+  downloads) to turn a downloaded model into a brand-new unit, item, doodad
+  or destructible — name, base object and icon included, textures re-pathed
+  automatically.
+- **Built-in 3D model preview**: click any object and its model renders in a
+  WebGL viewer with animations (drag to rotate, scroll to zoom). Textures load
+  from the source map/folder; stock Blizzard textures stream from
+  hiveworkshop.com when online.
+- Tick the objects you want, choose your target map or campaign, click *Build
+  import drop*. Rawcode collisions are fixed across **all** sources and the
+  target at once. The results view shows what was ported, which IDs were
+  renamed, and the exact World Editor steps — with buttons to open the drop
+  folder and the full report.
+
+Download it from the *Build Windows executable* workflow run (repo **Actions**
+tab → latest run → `wc3-object-porter-gui-windows` artifact), or from a
+Release when one is published. To build it yourself: `npm run gui:package` →
+`release-gui/WC3ObjectPorter.exe`. During development, `npm run gui` launches
+it from source.
+
+## Standalone CLI build (no Node.js required)
 
 A packaged `wc3-porter.exe` is built by the *Build Windows executable* GitHub
 Actions workflow: open the repo's **Actions** tab, pick the latest run, and
@@ -85,6 +111,10 @@ node dist/cli.js port --source MySource.w3x --target MyMap.w3x \
 # Port every custom object, including the source's edits to standard objects
 node dist/cli.js port --source MySource.w3x --target MyMap.w3x \
     --out drop/ --all --include-standard-mods
+
+# Port from several maps at once (collisions fixed across all of them)
+node dist/cli.js port -s MapA.w3x -s MapB.w3x --target MyMap.w3x \
+    --out drop/ --all
 ```
 
 During development, `npm run cli -- <args>` runs the CLI without building.

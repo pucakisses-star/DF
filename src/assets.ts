@@ -1,12 +1,13 @@
 /**
  * Collects imported files (models, textures, icons, sounds, ...) referenced by
- * ported objects out of the source archive, gives every file a clean
- * `war3mapImported\<name>` path, and patches texture paths inside .mdx models
- * so nothing has to be re-pathed by hand in the Import Manager.
+ * ported objects out of an asset source (map archive or plain folder), gives
+ * every file a clean `war3mapImported\<name>` path, and patches texture paths
+ * inside .mdx models so nothing has to be re-pathed by hand in the Import
+ * Manager.
  */
 import { MdlxModel } from './formats';
-import { MapData } from './mapdata';
 import { Manifest } from './manifest';
+import { AssetSource, normalizeAssetPath } from './source';
 
 /** Extensions that mark a string field value as an asset path. */
 const ASSET_EXTENSIONS = [
@@ -32,6 +33,7 @@ export function looksLikeAssetPath(value: string): boolean {
 }
 
 export interface CollectedAsset {
+  source: string;
   sourcePath: string;
   importPath: string;
   bytes: Uint8Array;
@@ -39,50 +41,63 @@ export interface CollectedAsset {
   patched: boolean;
 }
 
-export class AssetCollector {
-  /** normalized source path -> collected asset */
-  readonly assets = new Map<string, CollectedAsset>();
-  readonly warnings: string[] = [];
-  private usedImportPaths = new Set<string>();
+/**
+ * Allocates import paths that are unique across ALL sources of a drop, so two
+ * maps can both ship a `hero.blp` without clobbering each other.
+ */
+export class ImportPathRegistry {
+  private used = new Set<string>();
 
-  constructor(
-    private source: MapData,
-    private manifest: Manifest,
-  ) {
-    for (const importPath of Object.values(manifest.assetMap)) {
-      this.usedImportPaths.add(importPath.toLowerCase());
-    }
+  claim(importPath: string): void {
+    this.used.add(importPath.toLowerCase());
   }
 
-  private static normalize(path: string): string {
-    return MapData.normalizePath(path.trim()).toLowerCase();
+  isFree(importPath: string): boolean {
+    return !this.used.has(importPath.toLowerCase());
   }
 
-  private static baseName(path: string): string {
-    const norm = MapData.normalizePath(path);
-    const idx = norm.lastIndexOf('\\');
-    return idx >= 0 ? norm.slice(idx + 1) : norm;
-  }
-
-  private allocateImportPath(sourcePath: string): string {
-    const base = AssetCollector.baseName(sourcePath);
+  allocate(sourcePath: string): string {
+    const norm = normalizeAssetPath(sourcePath);
+    const base = norm.slice(norm.lastIndexOf('\\') + 1);
     const dot = base.lastIndexOf('.');
     const stem = dot > 0 ? base.slice(0, dot) : base;
     const ext = dot > 0 ? base.slice(dot) : '';
     for (let i = 0; ; i++) {
       const candidate = IMPORT_PREFIX + (i === 0 ? base : `${stem}_${i}${ext}`);
-      if (!this.usedImportPaths.has(candidate.toLowerCase())) {
-        this.usedImportPaths.add(candidate.toLowerCase());
+      if (this.isFree(candidate)) {
+        this.claim(candidate);
         return candidate;
       }
     }
   }
+}
+
+export class AssetCollector {
+  /** normalized source path -> collected asset */
+  readonly assets = new Map<string, CollectedAsset>();
+  readonly warnings: string[] = [];
+
+  constructor(
+    private source: AssetSource,
+    /** Key that scopes this source's entries in the manifest. */
+    private sourceKey: string,
+    private manifest: Manifest,
+    private registry: ImportPathRegistry,
+  ) {}
+
+  private static normalize(path: string): string {
+    return normalizeAssetPath(path).toLowerCase();
+  }
+
+  private manifestKey(normPath: string): string {
+    return `${this.sourceKey}|${normPath}`;
+  }
 
   /**
    * Import the file at `path` (as referenced by an object field or a model
-   * texture) from the source archive. Returns the new import path, or null
-   * when the path does not resolve to a file inside the source archive (then
-   * it is a stock game asset and must not be rewritten).
+   * texture) from the source. Returns the new import path, or null when the
+   * path does not resolve to a file inside the source (then it is a stock
+   * game asset and must not be rewritten).
    */
   collect(path: string): string | null {
     const norm = AssetCollector.normalize(path);
@@ -96,10 +111,21 @@ export class AssetCollector {
       return null;
     }
 
-    const importPath = this.manifest.assetMap[norm] ?? this.allocateImportPath(path);
-    this.manifest.assetMap[norm] = importPath;
+    let importPath = this.manifest.assetMap[this.manifestKey(norm)];
+    if (importPath) {
+      this.registry.claim(importPath);
+    } else {
+      importPath = this.registry.allocate(path);
+      this.manifest.assetMap[this.manifestKey(norm)] = importPath;
+    }
 
-    const asset: CollectedAsset = { sourcePath: MapData.normalizePath(path.trim()), importPath, bytes, patched: false };
+    const asset: CollectedAsset = {
+      source: this.source.name,
+      sourcePath: normalizeAssetPath(path),
+      importPath,
+      bytes,
+      patched: false,
+    };
     // Register before recursing so texture cycles cannot loop forever.
     this.assets.set(norm, asset);
 
@@ -115,7 +141,7 @@ export class AssetCollector {
     return importPath;
   }
 
-  /** Rewrite in-archive texture paths inside an MDX model to their import paths. */
+  /** Rewrite in-source texture paths inside an MDX model to their import paths. */
   private patchModel(asset: CollectedAsset): void {
     let model: MdlxModel;
     try {
@@ -177,10 +203,10 @@ export class AssetCollector {
       if (portraitImport && portraitImport !== expected) {
         const norm = AssetCollector.normalize(portraitSource);
         const collected = this.assets.get(norm);
-        if (collected && !this.usedImportPaths.has(expected.toLowerCase())) {
-          this.usedImportPaths.add(expected.toLowerCase());
+        if (collected && this.registry.isFree(expected)) {
+          this.registry.claim(expected);
           collected.importPath = expected;
-          this.manifest.assetMap[norm] = expected;
+          this.manifest.assetMap[this.manifestKey(norm)] = expected;
         }
       }
     }

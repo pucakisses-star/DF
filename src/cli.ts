@@ -21,12 +21,12 @@ Commands:
   port            Build an import drop (.w3o + assets + report) from a source map.
 
 Port options:
-  --source, -s <map>        Source map/campaign to take objects from (required)
+  --source, -s <map>        Source map/campaign to take objects from (repeatable)
   --target, -t <map>        Target map/campaign (enables collision-safe rawcode remapping)
   --out,    -o <dir>        Output directory for the drop (required)
-  --ids <a,b,c>             Rawcodes to port (their dependencies come along automatically)
-  --all                     Port every custom object in the source
-  --include-standard-mods   Also port the source's edits to standard objects
+  --ids <a,b,c>             Rawcodes to port (single source only; dependencies come along automatically)
+  --all                     Port every custom object in the source(s)
+  --include-standard-mods   Also port the sources' edits to standard objects
   --manifest <file>         ID/asset mapping file (default: <out>/port-manifest.json)
 
 The tool NEVER writes into a map or campaign file. It emits a drop that you
@@ -109,7 +109,7 @@ function main(): void {
     const { values } = parseArgs({
       args: rest,
       options: {
-        source: { type: 'string', short: 's' },
+        source: { type: 'string', short: 's', multiple: true },
         target: { type: 'string', short: 't' },
         out: { type: 'string', short: 'o' },
         ids: { type: 'string' },
@@ -119,16 +119,19 @@ function main(): void {
       },
     });
 
-    if (!values.source || !values.out) {
-      fail('port requires --source and --out (see wc3-porter help)');
+    const sourcePaths = values.source ?? [];
+    if (sourcePaths.length === 0 || !values.out) {
+      fail('port requires at least one --source and --out (see wc3-porter help)');
+    }
+    if (sourcePaths.length > 1 && values.ids) {
+      fail('--ids only works with a single --source; with multiple sources use --all');
     }
 
+    const ids = values.ids ? values.ids.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     const result = port({
-      sourcePath: values.source,
+      sources: sourcePaths.map((path) => ({ kind: 'map' as const, path, ids, all: values.all })),
       targetPath: values.target,
       outDir: values.out,
-      ids: values.ids ? values.ids.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
-      all: values.all,
       includeStandardMods: values['include-standard-mods'],
       manifestPath: values.manifest,
     });
