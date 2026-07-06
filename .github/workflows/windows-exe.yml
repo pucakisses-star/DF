@@ -1,0 +1,44 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Package wc3-porter.exe
+        run: npm run package:win
+
+      - name: Smoke-test the executable
+        run: release\wc3-porter.exe help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wc3-porter-windows
+          path: release/wc3-porter.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/wc3-porter.exe

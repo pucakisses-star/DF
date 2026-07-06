@@ -11,7 +11,9 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "bundle": "esbuild dist/cli.js --bundle --platform=node --target=node22 --outfile=build/cli.bundle.cjs",
+    "package:win": "npm run build && npm run bundle && pkg build/cli.bundle.cjs -t node22-win-x64 -o release/wc3-porter.exe"
   },
   "repository": {
     "type": "git",
@@ -22,6 +24,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "@yao-pkg/pkg": "^6.21.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"

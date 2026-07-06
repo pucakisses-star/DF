@@ -48,7 +48,25 @@ Applying the drop takes ~30 seconds in the World Editor:
 3. **Object Editor** → *File → Import Object Settings...* → pick `import.w3o`.
 4. Save. Done — the editor performed every write with its own code.
 
-## Usage
+## Standalone Windows build (no Node.js required)
+
+A packaged `wc3-porter.exe` is built by the *Build Windows executable* GitHub
+Actions workflow: open the repo's **Actions** tab, pick the latest run, and
+download the `wc3-porter-windows` artifact (pushing a `v*` tag instead attaches
+the exe to a GitHub Release). To build it yourself: `npm run package:win` →
+`release/wc3-porter.exe`.
+
+It's still a command-line tool: put the exe somewhere convenient, open a
+Command Prompt in that folder, and run e.g.
+
+```bat
+wc3-porter.exe inspect "C:\Maps\SourceMap.w3x"
+wc3-porter.exe port --source "C:\Maps\SourceMap.w3x" --target "C:\Maps\MyMap.w3x" --out drop --all
+```
+
+(Double-clicking it just shows the usage text.)
+
+## Usage (from source)
 
 ```sh
 npm install

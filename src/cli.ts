@@ -42,6 +42,16 @@ function main(): void {
 
   if (!command || command === 'help' || command === '--help' || command === '-h') {
     console.log(USAGE);
+    // Double-clicking wc3-porter.exe opens a console that would close
+    // instantly; hold it open so the usage text is actually readable.
+    if (!command && process.platform === 'win32' && process.stdout.isTTY) {
+      console.log('\nThis is a command-line tool: open a Command Prompt in this folder and run, e.g.');
+      console.log('  wc3-porter.exe inspect MyMap.w3x');
+      const readline = require('readline') as typeof import('readline');
+      readline
+        .createInterface({ input: process.stdin, output: process.stdout })
+        .question('\nPress Enter to close...', () => process.exit(0));
+    }
     return;
   }
 
