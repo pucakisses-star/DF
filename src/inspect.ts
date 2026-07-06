@@ -10,6 +10,8 @@ export interface InspectedObject {
   baseId: string;
   name?: string;
   modifications: number;
+  /** Custom model path, when one of the object's fields sets a model. */
+  modelPath?: string;
 }
 
 export interface InspectResult {
@@ -34,10 +36,16 @@ export function inspect(path: string): InspectResult {
     standardMods += cat.file.originalTable.objects.length;
     for (const obj of cat.file.customTable.objects) {
       let name: string | undefined;
+      let modelPath: string | undefined;
       for (const mod of obj.modifications) {
-        if (mod.variableType === 3 && typeof mod.value === 'string' && /^.nam$/.test(mod.id)) {
+        if (mod.variableType !== 3 || typeof mod.value !== 'string') {
+          continue;
+        }
+        if (name === undefined && /^.nam$/.test(mod.id)) {
           name = source.resolveTrigStr(mod.value) ?? mod.value;
-          break;
+        }
+        if (modelPath === undefined && /\.(mdx|mdl)$/i.test(mod.value.trim())) {
+          modelPath = mod.value.trim();
         }
       }
       objects.push({
@@ -46,6 +54,7 @@ export function inspect(path: string): InspectResult {
         baseId: obj.oldId,
         name,
         modifications: obj.modifications.length,
+        modelPath,
       });
     }
   }

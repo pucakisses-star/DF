@@ -3,11 +3,13 @@
  * porter library. All heavy lifting (parsing, closure, emission) lives in
  * src/; nothing here touches map internals.
  */
-import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, net, shell } from 'electron';
 import { join } from 'path';
 import { PorterError } from '../src/formats';
 import { inspect } from '../src/inspect';
 import { PortOptions, port } from '../src/porter';
+import { FolderData } from '../src/source';
+import { folderObjectDefaults } from '../src/folderobjects';
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -24,10 +26,10 @@ function wrap<T>(fn: () => T): IpcResult<T> {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 1120,
-    height: 800,
-    minWidth: 860,
-    minHeight: 600,
+    width: 1360,
+    height: 860,
+    minWidth: 980,
+    minHeight: 640,
     autoHideMenuBar: true,
     title: 'WC3 Object Porter',
     webPreferences: {
@@ -61,6 +63,23 @@ ipcMain.handle('pick-dir', async (_event, title: string) => {
 
 ipcMain.handle('inspect-map', (_event, path: string) => wrap(() => inspect(path)));
 
+ipcMain.handle('inspect-folder', (_event, path: string) =>
+  wrap(() => {
+    const folder = new FolderData(path);
+    return {
+      name: folder.name,
+      models: folder.filesWithExtension('.mdx', '.mdl'),
+      icons: folder.filesWithExtension('.blp', '.dds', '.tga', '.jpg'),
+      defaults: {
+        units: folderObjectDefaults('units'),
+        items: folderObjectDefaults('items'),
+        doodads: folderObjectDefaults('doodads'),
+        destructables: folderObjectDefaults('destructables'),
+      },
+    };
+  }),
+);
+
 ipcMain.handle('run-port', (_event, options: PortOptions) => wrap(() => port(options)));
 
 ipcMain.handle('open-path', (_event, path: string) => shell.openPath(path));
@@ -68,6 +87,68 @@ ipcMain.handle('open-path', (_event, path: string) => shell.openPath(path));
 ipcMain.handle('show-in-folder', (_event, path: string) => {
   shell.showItemInFolder(path);
 });
+
+// --- Model preview file resolution ------------------------------------------
+
+/**
+ * Sources stay open for preview texture requests (a model triggers several).
+ * The cache is small and re-validated only by path; re-adding a changed map
+ * means re-picking it in the UI, which recreates the entry via inspect below.
+ */
+import { MapData } from '../src/mapdata';
+
+const previewCache = new Map<string, MapData | FolderData>();
+const hiveCache = new Map<string, Uint8Array | null>();
+
+function previewSource(kind: 'map' | 'folder', path: string): MapData | FolderData {
+  const key = `${kind}:${path}`;
+  let source = previewCache.get(key);
+  if (!source) {
+    source = kind === 'map' ? new MapData(path) : new FolderData(path);
+    previewCache.set(key, source);
+  }
+  return source;
+}
+
+/** Stock Blizzard assets: fetch from Hive Workshop's game-data mirror. */
+async function fetchFromHive(filePath: string): Promise<Uint8Array | null> {
+  const norm = filePath.replace(/\\/g, '/').toLowerCase();
+  const cached = hiveCache.get(norm);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let bytes: Uint8Array | null = null;
+  try {
+    const response = await net.fetch(`https://www.hiveworkshop.com/casc-contents?path=${encodeURIComponent(norm)}`);
+    if (response.ok) {
+      const type = response.headers.get('content-type') ?? '';
+      if (!type.includes('text/html')) {
+        bytes = new Uint8Array(await response.arrayBuffer());
+      }
+    }
+  } catch {
+    bytes = null; // Offline or blocked: preview degrades to untextured.
+  }
+  hiveCache.set(norm, bytes);
+  return bytes;
+}
+
+ipcMain.handle(
+  'preview-file',
+  async (_event, source: { kind: 'map' | 'folder'; path: string } | null, filePath: string) => {
+    if (source) {
+      try {
+        const bytes = previewSource(source.kind, source.path).getFileBytes(filePath);
+        if (bytes) {
+          return bytes;
+        }
+      } catch {
+        // Fall through to the Hive fallback.
+      }
+    }
+    return await fetchFromHive(filePath);
+  },
+);
 
 // Used by CI to confirm the packaged main process boots.
 if (process.argv.includes('--smoke-test')) {

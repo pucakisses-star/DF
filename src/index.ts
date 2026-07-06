@@ -1,4 +1,6 @@
 export * from './formats';
+export * from './source';
+export * from './folderobjects';
 export * from './ids';
 export * from './safety';
 export * from './manifest';

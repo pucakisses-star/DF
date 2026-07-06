@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -6,7 +6,7 @@ import { MdlxModel, MpqArchive, PorterError, War3MapW3o } from '../src/formats';
 import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
 import { port } from '../src/porter';
-import { writeSourceMap, writeTargetMap } from './fixtures';
+import { makeModel, writeSourceMap, writeTargetMap } from './fixtures';
 
 let dir: string;
 let sourcePath: string;
@@ -162,8 +162,11 @@ describe('port', () => {
     expect(byId(again)).toEqual(byId(first));
 
     const manifest = JSON.parse(readFileSync(first.manifestPath, 'utf8'));
-    expect(manifest.idMap['h000']).toBe('h002');
-    expect(manifest.assetMap['war3mapimported\\customknight.mdx']).toBe('war3mapImported\\CustomKnight.mdx');
+    expect(manifest.version).toBe(2);
+    expect(manifest.idMap['source.w3x|h000']).toBe('h002');
+    expect(manifest.assetMap['source.w3x|war3mapimported\\customknight.mdx']).toBe(
+      'war3mapImported\\CustomKnight.mdx',
+    );
   });
 
   it('ports everything with --all and keeps IDs stable for non-colliding objects', () => {
@@ -196,7 +199,7 @@ describe('port', () => {
 
   it('fails clearly on unknown rawcodes', () => {
     expect(() => port({ sourcePath, targetPath, outDir: join(dir, 'drop5'), ids: ['xxxx'] })).toThrow(
-      /No custom object with rawcode 'xxxx'/,
+      /no custom object with rawcode 'xxxx'/,
     );
   });
 
@@ -204,5 +207,130 @@ describe('port', () => {
     const result = port({ sourcePath, outDir: join(dir, 'drop6'), ids: ['h000'] });
     expect(result.objects.find((o) => o.sourceId === 'h000')!.newId).toBe('h000');
     expect(result.warnings.some((w) => w.includes('No target map'))).toBe(true);
+  });
+});
+
+describe('multi-source port', () => {
+  it('ports from two maps at once with cross-source collision handling', () => {
+    // Second source: a copy of the source map (same rawcodes everywhere).
+    const source2 = join(dir, 'source2.w3x');
+    writeFileSync(source2, readFileSync(sourcePath));
+
+    const result = port({
+      sources: [
+        { kind: 'map', path: sourcePath, ids: ['h000'] },
+        { kind: 'map', path: source2, ids: ['h000'] },
+      ],
+      targetPath,
+      outDir: join(dir, 'drop-multi'),
+    });
+
+    // 4 objects per source (unit + ability + buff + item).
+    expect(result.objects).toHaveLength(8);
+    const bySource = new Map<string, string[]>();
+    for (const obj of result.objects) {
+      const list = bySource.get(obj.source) ?? [];
+      list.push(obj.newId);
+      bySource.set(obj.source, list);
+    }
+    expect([...bySource.keys()].sort()).toEqual(['source.w3x', 'source2.w3x']);
+
+    // No two ported objects may share an ID, and none may collide with the target.
+    const allIds = result.objects.map((o) => o.newId);
+    expect(new Set(allIds).size).toBe(allIds.length);
+    expect(allIds).not.toContain('h000');
+    expect(allIds).not.toContain('h001');
+
+    // Both sources ship CustomKnight.mdx; import paths must not clobber.
+    const importPaths = result.assets.map((a) => a.importPath);
+    expect(new Set(importPaths.map((p) => p.toLowerCase())).size).toBe(importPaths.length);
+
+    // Each source's unit must reference ITS OWN remapped ability.
+    const w3o = new War3MapW3o();
+    w3o.load(readFileSync(result.w3oPath));
+    expect(w3o.units!.customTable.objects).toHaveLength(2);
+    const abilityIds = w3o.abilities!.customTable.objects.map((o) => o.newId);
+    for (const unit of w3o.units!.customTable.objects) {
+      const uabi = unit.modifications.find((m) => m.id === 'uabi')!.value as string;
+      const customRef = uabi.split(',').filter((t) => t !== 'AHbz');
+      expect(customRef).toHaveLength(1);
+      expect(abilityIds).toContain(customRef[0]);
+    }
+  });
+});
+
+describe('folder sources (Hive downloads)', () => {
+  it('creates a unit from a model folder with re-pathed assets', () => {
+    const folder = join(dir, 'HiveDwarf');
+    mkdirSync(join(folder, 'textures'), { recursive: true });
+    writeFileSync(join(folder, 'DwarfHero.mdx'), makeModel('DwarfHero', ['textures\\dwarf.blp']));
+    writeFileSync(join(folder, 'textures', 'dwarf.blp'), 'fake-dwarf-texture');
+    writeFileSync(join(folder, 'icon.blp'), 'fake-icon');
+
+    const result = port({
+      sources: [
+        {
+          kind: 'folder',
+          path: folder,
+          objects: [
+            {
+              category: 'units',
+              name: 'Dwarf Hero',
+              modelPath: 'DwarfHero.mdx',
+              iconPath: 'icon.blp',
+            },
+          ],
+        },
+      ],
+      targetPath,
+      outDir: join(dir, 'drop-folder'),
+    });
+
+    expect(result.objects).toHaveLength(1);
+    const unit = result.objects[0];
+    expect(unit.category).toBe('units');
+    expect(unit.baseId).toBe('hfoo');
+    expect(unit.reason).toBe('created from folder');
+    expect(unit.newId).not.toBe('h000'); // target owns h000
+
+    const w3o = new War3MapW3o();
+    w3o.load(readFileSync(result.w3oPath));
+    const mods = Object.fromEntries(w3o.units!.customTable.objects[0].modifications.map((m) => [m.id, m.value]));
+    expect(mods['unam']).toBe('Dwarf Hero');
+    expect(mods['umdl']).toBe('war3mapImported\\DwarfHero.mdx');
+    expect(mods['uico']).toBe('war3mapImported\\icon.blp');
+
+    // Model texture path patched to the imported texture.
+    const model = new MdlxModel();
+    model.load(new Uint8Array(readFileSync(join(result.outDir, 'war3mapImported/DwarfHero.mdx'))));
+    expect(model.textures[0].path).toBe('war3mapImported\\dwarf.blp');
+
+    // Idempotent: second run keeps the same generated ID.
+    const again = port({
+      sources: [
+        {
+          kind: 'folder',
+          path: folder,
+          objects: [{ category: 'units', name: 'Dwarf Hero', modelPath: 'DwarfHero.mdx', iconPath: 'icon.blp' }],
+        },
+      ],
+      targetPath,
+      outDir: join(dir, 'drop-folder'),
+    });
+    expect(again.objects[0].newId).toBe(unit.newId);
+  });
+
+  it('rejects a folder spec whose model is missing', () => {
+    const folder = join(dir, 'EmptyFolder');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'readme.txt'), 'hi');
+    expect(() =>
+      port({
+        sources: [
+          { kind: 'folder', path: folder, objects: [{ category: 'units', name: 'X', modelPath: 'nope.mdx' }] },
+        ],
+        outDir: join(dir, 'drop-folder2'),
+      }),
+    ).toThrow(/model 'nope.mdx' not found/);
   });
 });

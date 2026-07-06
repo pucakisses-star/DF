@@ -16,6 +16,7 @@ import {
   War3MapWts,
 } from './formats';
 import { parseVerified, RoundtripResult } from './safety';
+import { AssetSource } from './source';
 
 export interface LoadedCategory {
   def: CategoryDef;
@@ -25,7 +26,7 @@ export interface LoadedCategory {
   roundtrip: RoundtripResult;
 }
 
-export class MapData {
+export class MapData implements AssetSource {
   readonly path: string;
   readonly name: string;
   readonly map: War3Map;

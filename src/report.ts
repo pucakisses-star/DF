@@ -36,13 +36,13 @@ export function buildReport(result: PortResult, sourceName: string, targetName?:
   if (result.objects.length > 0) {
     lines.push('## Objects');
     lines.push('');
-    lines.push('| Category | Name | Source ID | Imported as | Based on | Pulled in by | Mods |');
-    lines.push('|---|---|---|---|---|---|---|');
+    lines.push('| Source | Category | Name | Source ID | Imported as | Based on | Pulled in by | Mods |');
+    lines.push('|---|---|---|---|---|---|---|---|');
     for (const obj of result.objects) {
       lines.push(
-        `| ${categoryByKey(obj.category).label} | ${escapeCell(obj.name ?? '')} | \`${obj.sourceId}\` | ` +
+        `| ${escapeCell(obj.source)} | ${categoryByKey(obj.category).label} | ${escapeCell(obj.name ?? '')} | \`${escapeCell(obj.sourceId)}\` | ` +
           `${obj.remapped ? `\`${obj.newId}\` (remapped)` : `\`${obj.newId}\``} | \`${obj.baseId}\` | ` +
-          `${obj.reason === 'requested' ? 'requested' : `\`${obj.reason}\``} | ${obj.modifications} |`,
+          `${obj.reason === 'requested' || obj.reason === 'created from folder' ? obj.reason : `\`${obj.reason}\``} | ${obj.modifications} |`,
       );
     }
     lines.push('');
@@ -51,11 +51,11 @@ export function buildReport(result: PortResult, sourceName: string, targetName?:
   if (result.assets.length > 0) {
     lines.push('## Assets');
     lines.push('');
-    lines.push('| Source path | Import path | Size | Patched |');
-    lines.push('|---|---|---|---|');
+    lines.push('| Source | Source path | Import path | Size | Patched |');
+    lines.push('|---|---|---|---|---|');
     for (const asset of result.assets) {
       lines.push(
-        `| \`${escapeCell(asset.sourcePath)}\` | \`${escapeCell(asset.importPath)}\` | ${asset.bytes} B | ${asset.patched ? 'texture paths rewritten' : ''} |`,
+        `| ${escapeCell(asset.source)} | \`${escapeCell(asset.sourcePath)}\` | \`${escapeCell(asset.importPath)}\` | ${asset.bytes} B | ${asset.patched ? 'texture paths rewritten' : ''} |`,
       );
     }
     lines.push('');
@@ -66,11 +66,11 @@ export function buildReport(result: PortResult, sourceName: string, targetName?:
     lines.push('');
     lines.push('Every automatic edit to a field value, for review:');
     lines.push('');
-    lines.push('| Object | Field | Kind | From | To |');
-    lines.push('|---|---|---|---|---|');
+    lines.push('| Source | Object | Field | Kind | From | To |');
+    lines.push('|---|---|---|---|---|---|');
     for (const rw of result.rewrites) {
       lines.push(
-        `| \`${rw.objectId}\` | \`${rw.field}\` | ${rw.kind} | \`${escapeCell(rw.from)}\` | \`${escapeCell(rw.to)}\` |`,
+        `| ${escapeCell(rw.source)} | \`${escapeCell(rw.objectId)}\` | \`${rw.field}\` | ${rw.kind} | \`${escapeCell(rw.from)}\` | \`${escapeCell(rw.to)}\` |`,
       );
     }
     lines.push('');
