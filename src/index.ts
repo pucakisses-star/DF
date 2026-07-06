@@ -1,4 +1,6 @@
 export * from './formats';
+export * from './objectdata';
+export * from './w3o';
 export * from './source';
 export * from './folderobjects';
 export * from './ids';

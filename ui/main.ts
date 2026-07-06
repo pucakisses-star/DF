@@ -133,20 +133,41 @@ async function fetchFromHive(filePath: string): Promise<Uint8Array | null> {
   return bytes;
 }
 
+/** Candidate paths for a file reference: the game swaps .mdl/.mdx at load time. */
+function pathCandidates(filePath: string): string[] {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.mdl') || lower.endsWith('.mdx')) {
+    const swapped = filePath.slice(0, -1) + (lower.endsWith('.mdl') ? 'x' : 'l');
+    // Prefer the binary .mdx variant.
+    return lower.endsWith('.mdl') ? [swapped, filePath] : [filePath, swapped];
+  }
+  return [filePath];
+}
+
 ipcMain.handle(
   'preview-file',
   async (_event, source: { kind: 'map' | 'folder'; path: string } | null, filePath: string) => {
+    const candidates = pathCandidates(filePath);
     if (source) {
       try {
-        const bytes = previewSource(source.kind, source.path).getFileBytes(filePath);
-        if (bytes) {
-          return bytes;
+        const data = previewSource(source.kind, source.path);
+        for (const candidate of candidates) {
+          const bytes = data.getFileBytes(candidate);
+          if (bytes) {
+            return bytes;
+          }
         }
       } catch {
         // Fall through to the Hive fallback.
       }
     }
-    return await fetchFromHive(filePath);
+    for (const candidate of candidates) {
+      const bytes = await fetchFromHive(candidate);
+      if (bytes) {
+        return bytes;
+      }
+    }
+    return null;
   },
 );
 

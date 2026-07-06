@@ -20,11 +20,12 @@ import {
   CATEGORIES,
   CategoryKey,
   Modification,
-  ModifiedObject,
+  ModificationSet,
   PorterError,
-  War3MapW3o,
+  W3Object,
   newObjectFile,
 } from './formats';
+import { loadW3o, saveW3o, W3oFiles } from './w3o';
 import { IdAllocator, isRawcode, isRawcodeList } from './ids';
 import { MapData } from './mapdata';
 import { FolderData } from './source';
@@ -99,11 +100,11 @@ export interface PortResult {
 
 interface SourceEntry {
   category: CategoryKey;
-  object: ModifiedObject;
+  object: W3Object;
 }
 
 /** Best-effort display name: the value of the category's *nam field, if modified. */
-function displayName(obj: ModifiedObject, resolveTrigStr: (v: string) => string | undefined): string | undefined {
+function displayName(obj: W3Object, resolveTrigStr: (v: string) => string | undefined): string | undefined {
   for (const mod of obj.modifications) {
     if (mod.variableType === 3 && typeof mod.value === 'string' && /^.nam$/.test(mod.id)) {
       return resolveTrigStr(mod.value) ?? mod.value;
@@ -112,19 +113,24 @@ function displayName(obj: ModifiedObject, resolveTrigStr: (v: string) => string 
   return undefined;
 }
 
-function cloneObject(obj: ModifiedObject): ModifiedObject {
-  const copy = new ModifiedObject();
+function cloneObject(obj: W3Object): W3Object {
+  const copy = new W3Object();
   copy.oldId = obj.oldId;
   copy.newId = obj.newId;
-  copy.modifications = obj.modifications.map((m) => {
-    const mc = new Modification();
-    mc.id = m.id;
-    mc.variableType = m.variableType;
-    mc.levelOrVariation = m.levelOrVariation;
-    mc.dataPointer = m.dataPointer;
-    mc.value = m.value;
-    mc.u1 = m.u1;
-    return mc;
+  copy.sets = obj.sets.map((set) => {
+    const sc = new ModificationSet();
+    sc.flag = set.flag;
+    sc.modifications = set.modifications.map((m) => {
+      const mc = new Modification();
+      mc.id = m.id;
+      mc.variableType = m.variableType;
+      mc.levelOrVariation = m.levelOrVariation;
+      mc.dataPointer = m.dataPointer;
+      mc.value = m.value;
+      mc.u1 = m.u1;
+      return mc;
+    });
+    return sc;
   });
   return copy;
 }
@@ -233,13 +239,13 @@ export function port(options: PortOptions): PortResult {
 
   const rewrites: RewriteRecord[] = [];
   const ported: PortedObject[] = [];
-  const outputObjects = new Map<CategoryKey, ModifiedObject[]>();
-  const standardMods = new Map<CategoryKey, ModifiedObject[]>();
+  const outputObjects = new Map<CategoryKey, W3Object[]>();
+  const standardMods = new Map<CategoryKey, W3Object[]>();
   const registry = new ImportPathRegistry();
   const collectors: AssetCollector[] = [];
   let totalSkippedStandardMods = 0;
 
-  const pushOutput = (category: CategoryKey, obj: ModifiedObject): void => {
+  const pushOutput = (category: CategoryKey, obj: W3Object): void => {
     const list = outputObjects.get(category) ?? [];
     list.push(obj);
     outputObjects.set(category, list);
@@ -508,8 +514,16 @@ export function port(options: PortOptions): PortResult {
 
   // --- Emit ------------------------------------------------------------------
 
-  const w3o = new War3MapW3o();
-  w3o.version = 1;
+  // Any v3 (Reforged 1.33+) source forces the whole drop to v3, because a
+  // single category file cannot mix framings. The 1.33+ editor reads both.
+  const maxSourceVersion = Math.max(
+    2,
+    ...sources
+      .filter((s): s is LoadedMapSource => s.kind === 'map')
+      .flatMap((s) => [...s.data.categories.values()].map((c) => c.file.version)),
+  );
+
+  const w3oFiles: W3oFiles = {};
   for (const def of CATEGORIES) {
     const custom = outputObjects.get(def.key) ?? [];
     const original = standardMods.get(def.key) ?? [];
@@ -517,23 +531,17 @@ export function port(options: PortOptions): PortResult {
       continue;
     }
     const file = newObjectFile(def);
-    file.version = Math.max(
-      2,
-      ...sources.filter((s): s is LoadedMapSource => s.kind === 'map').map((s) => s.data.categories.get(def.key)?.file.version ?? 0),
-    );
+    file.version = maxSourceVersion;
     file.originalTable.objects = original;
     file.customTable.objects = custom;
-    // The container types are structurally identical per layout; the compiler
-    // cannot see which of the two layouts `file` is, hence the cast.
-    (w3o as unknown as Record<string, unknown>)[def.key] = file;
+    w3oFiles[def.key] = file;
   }
 
-  const w3oBytes = w3o.save();
+  const w3oBytes = saveW3o(w3oFiles);
 
   // Final self-check: our own output must survive a parse.
   try {
-    const check = new War3MapW3o();
-    check.load(w3oBytes);
+    loadW3o(w3oBytes);
   } catch (e) {
     throw new PorterError(`Internal error: generated .w3o failed to re-parse (${(e as Error).message}). Nothing was written.`);
   }

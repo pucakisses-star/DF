@@ -19,8 +19,8 @@ Given a source map and a target map, `wc3-porter port`:
 
 1. **Verifies before trusting.** Every object-data file must survive a
    roundtrip (parse → re-serialize → identical result) before the run
-   continues. If a file uses a format the tool doesn't fully understand
-   (e.g. Reforged 1.33+), it aborts cleanly instead of guessing.
+   continues. If a file uses a format the tool doesn't fully understand,
+   it aborts cleanly instead of guessing.
 2. **Walks the dependency closure.** Ask for one unit and its custom
    abilities, the buffs those abilities apply, the items it sells, the units it
    trains, the upgrades it uses — all come along, automatically.
@@ -125,11 +125,13 @@ target (campaign-level object data, `war3campaign.*`).
 
 ## Design notes
 
-- **No hand-written binary code.** All parsing/serialization is done by
-  [mdx-m3-viewer](https://github.com/flowtsohg/mdx-m3-viewer)'s parsers (MPQ,
-  the seven `war3map.*` object formats, `war3map.w3o`, MDX). This project only
-  implements the *graph logic*: ID allocation, dependency closure, reference
-  rewriting.
+- **Minimal hand-written binary code.** MPQ archives, MDX models, string
+  tables and modification values are all parsed/serialized by
+  [mdx-m3-viewer](https://github.com/flowtsohg/mdx-m3-viewer). The one thing
+  this project serializes itself is the object-file *framing* (src/objectdata.ts),
+  because the library stops at format v2 and Reforged 1.33+ writes v3 — and
+  that framing is pinned by byte-layout tests, cross-checked against the
+  library parser for v1/v2, and guarded by the roundtrip gate at runtime.
 - **The roundtrip gate is non-negotiable.** Any file the tool cannot
   re-serialize losslessly aborts the run before any output is produced.
 - **The `.w3o` output is itself re-parsed before being written** as a final
@@ -143,13 +145,14 @@ target (campaign-level object data, `war3campaign.*`).
 
 ## Limitations
 
-- Object-data format versions 1–2 (classic through early Reforged). Version 3+
-  (Reforged 1.33+) files are detected and refused — never misread.
+- Object-data format versions 1–3 are supported (classic through current
+  Reforged, including the 1.33+ "modification sets" format). Anything newer is
+  detected and refused — never misread.
 - Triggers/JASS are not ported; if a ported object is referenced from script in
   the source, wire it up in the target yourself (the report gives you the final
   rawcodes).
 - `.mdl` (text-format) models are copied without texture-path patching (rare in
-  finished maps; a warning is emitted).
+  finished maps; a warning is emitted). They do render in the model preview.
 
 ## Development
 

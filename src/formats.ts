@@ -10,11 +10,9 @@ import War3MapW3d from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3d/file';
 import War3MapW3o from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3o/file';
 import War3MapWts from 'mdx-m3-viewer/dist/cjs/parsers/w3x/wts/file';
 import War3MapImp from 'mdx-m3-viewer/dist/cjs/parsers/w3x/imp/file';
-import ModificationTable from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modificationtable';
-import ModifiedObject from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modifiedobject';
-import Modification from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modification';
 import MdlxModel from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/model';
 import MpqArchive from 'mdx-m3-viewer/dist/cjs/parsers/mpq/archive';
+import { Modification, ModificationSet, ObjectDataFile, W3Object } from './objectdata';
 
 export {
   War3Map,
@@ -23,15 +21,19 @@ export {
   War3MapW3o,
   War3MapWts,
   War3MapImp,
-  ModificationTable,
-  ModifiedObject,
   Modification,
+  ModificationSet,
+  ObjectDataFile,
+  W3Object,
   MdlxModel,
   MpqArchive,
 };
 
-/** An object-data file: either the w3u layout or the w3d layout (extra level/pointer ints). */
-export type ObjectFile = War3MapW3u | War3MapW3d;
+/**
+ * An object-data file. Our own serializer (objectdata.ts) handles versions
+ * 1-3 including Reforged 1.33+ modification sets.
+ */
+export type ObjectFile = ObjectDataFile;
 
 export type CategoryKey =
   | 'units'
@@ -75,7 +77,7 @@ export function categoryByKey(key: CategoryKey): CategoryDef {
 }
 
 export function newObjectFile(def: CategoryDef): ObjectFile {
-  return def.optionalInts ? new War3MapW3d() : new War3MapW3u();
+  return new ObjectDataFile(def.optionalInts);
 }
 
 export function parseObjectFile(def: CategoryDef, bytes: Uint8Array): ObjectFile {

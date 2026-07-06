@@ -7,6 +7,7 @@
  * of bug where a partially-understood format gets rewritten as garbage.
  */
 import { CategoryDef, ObjectFile, PorterError, parseObjectFile } from './formats';
+import { MAX_FORMAT_VERSION, W3Object, peekFormatVersion } from './objectdata';
 
 export interface RoundtripResult {
   ok: boolean;
@@ -15,8 +16,8 @@ export interface RoundtripResult {
   message?: string;
 }
 
-/** Highest object-data format version this tool understands (TFT = 2). */
-export const MAX_SUPPORTED_VERSION = 2;
+/** Highest object-data format version this tool understands (3 = Reforged 1.33+). */
+export const MAX_SUPPORTED_VERSION = MAX_FORMAT_VERSION;
 
 interface PlainModification {
   id: string;
@@ -27,10 +28,15 @@ interface PlainModification {
   u1: number;
 }
 
+interface PlainSet {
+  flag: number;
+  modifications: PlainModification[];
+}
+
 interface PlainObject {
   oldId: string;
   newId: string;
-  modifications: PlainModification[];
+  sets: PlainSet[];
 }
 
 export interface PlainObjectFile {
@@ -40,20 +46,19 @@ export interface PlainObjectFile {
 }
 
 export function toPlain(file: ObjectFile): PlainObjectFile {
-  const mapObject = (o: {
-    oldId: string;
-    newId: string;
-    modifications: PlainModification[];
-  }): PlainObject => ({
+  const mapObject = (o: W3Object): PlainObject => ({
     oldId: o.oldId,
     newId: o.newId,
-    modifications: o.modifications.map((m) => ({
-      id: m.id,
-      variableType: m.variableType,
-      levelOrVariation: m.levelOrVariation,
-      dataPointer: m.dataPointer,
-      value: m.value,
-      u1: m.u1,
+    sets: o.sets.map((set) => ({
+      flag: set.flag,
+      modifications: set.modifications.map((m) => ({
+        id: m.id,
+        variableType: m.variableType,
+        levelOrVariation: m.levelOrVariation,
+        dataPointer: m.dataPointer,
+        value: m.value,
+        u1: m.u1,
+      })),
     })),
   });
 
@@ -86,20 +91,23 @@ export function parseVerified(
   bytes: Uint8Array,
   fileName: string,
 ): { file: ObjectFile; roundtrip: RoundtripResult } {
+  // Check the version up front so unsupported future formats produce a clear
+  // message instead of a confusing parse error from misaligned reads.
+  const version = peekFormatVersion(bytes);
+  if (version !== null && (version < 1 || version > MAX_SUPPORTED_VERSION)) {
+    throw new PorterError(
+      `${fileName}: object data format version ${version} is not supported ` +
+        `(this tool supports versions 1-${MAX_SUPPORTED_VERSION}, i.e. up to and including Reforged 1.33+). Aborting.`,
+    );
+  }
+
   let file: ObjectFile;
   try {
     file = parseObjectFile(def, bytes);
   } catch (e) {
     throw new PorterError(
       `${fileName}: failed to parse (${(e as Error).message}). ` +
-        `The file may use a newer format than this tool supports (e.g. Reforged 1.33+), or may already be damaged. Aborting without touching anything.`,
-    );
-  }
-
-  if (file.version > MAX_SUPPORTED_VERSION || file.version < 0) {
-    throw new PorterError(
-      `${fileName}: object data format version ${file.version} is not supported ` +
-        `(this tool supports versions 1-${MAX_SUPPORTED_VERSION}, i.e. up to classic/early-Reforged). Aborting.`,
+        `The file may use a newer format than this tool supports, or may already be damaged. Aborting without touching anything.`,
     );
   }
 
