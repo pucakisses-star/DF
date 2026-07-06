@@ -94,12 +94,36 @@ export class AssetCollector {
   }
 
   /**
+   * Object fields routinely reference models as `.mdl` while the archive
+   * stores `.mdx` (the game swaps the extension at load time). Resolve the
+   * referenced path to the file that actually exists.
+   */
+  private resolveActual(path: string): string | null {
+    if (this.source.hasFile(path)) {
+      return path;
+    }
+    const lower = path.toLowerCase();
+    if (lower.endsWith('.mdl') || lower.endsWith('.mdx')) {
+      const swapped = path.slice(0, -1) + (lower.endsWith('.mdl') ? 'x' : 'l');
+      if (this.source.hasFile(swapped)) {
+        return swapped;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Import the file at `path` (as referenced by an object field or a model
    * texture) from the source. Returns the new import path, or null when the
    * path does not resolve to a file inside the source (then it is a stock
    * game asset and must not be rewritten).
    */
-  collect(path: string): string | null {
+  collect(referencedPath: string): string | null {
+    const actual = this.resolveActual(referencedPath);
+    if (!actual) {
+      return null;
+    }
+    const path = actual;
     const norm = AssetCollector.normalize(path);
     const existing = this.assets.get(norm);
     if (existing) {

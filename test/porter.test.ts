@@ -2,11 +2,12 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { MdlxModel, MpqArchive, PorterError, War3MapW3o } from '../src/formats';
+import { MdlxModel, Modification, ModificationSet, MpqArchive, ObjectDataFile, PorterError, War3MapW3o } from '../src/formats';
+import { loadW3o } from '../src/w3o';
 import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
 import { port } from '../src/porter';
-import { makeModel, writeSourceMap, writeTargetMap } from './fixtures';
+import { makeModel, makeObject, writeSourceMap, writeTargetMap } from './fixtures';
 
 let dir: string;
 let sourcePath: string;
@@ -42,15 +43,15 @@ describe('MapData / roundtrip gate', () => {
     expect(() => new MapData(broken)).toThrow(PorterError);
   });
 
-  it('rejects unsupported format versions', () => {
+  it('rejects unsupported future format versions with a clear message', () => {
     const data = new MapData(sourcePath);
     const w3u = data.getFileBytes('war3map.w3u')!.slice();
-    w3u[0] = 3; // bump little-endian version int to 3 (Reforged 1.33+)
+    w3u[0] = 4; // bump little-endian version int past everything known
     const archive = new MpqArchive();
     archive.set('war3map.w3u', w3u.slice().buffer);
-    const path = join(dir, 'v3.w3x');
+    const path = join(dir, 'v4.w3x');
     writeFileSync(path, archive.save()!);
-    expect(() => new MapData(path)).toThrow(/version 3/);
+    expect(() => new MapData(path)).toThrow(/version 4/);
   });
 });
 
@@ -332,5 +333,125 @@ describe('folder sources (Hive downloads)', () => {
         outDir: join(dir, 'drop-folder2'),
       }),
     ).toThrow(/model 'nope.mdx' not found/);
+  });
+});
+
+describe('Reforged 1.33+ object data (format v3, modification sets)', () => {
+  it('parses a hand-assembled v3 byte layout exactly as documented', () => {
+    // version=3; originalTable empty; customTable: 1 object with 2 sets:
+    // set0 (flag 0) holds one int mod, set1 (flag 7) holds one string mod.
+    const str = 'Hi';
+    const bytes = new Uint8Array(256); // generous; sliced to the written length below
+    const view = new DataView(bytes.buffer);
+    const ascii = (offset: number, text: string) => {
+      for (let i = 0; i < text.length; i++) {
+        bytes[offset + i] = text.charCodeAt(i);
+      }
+    };
+    let o = 0;
+    view.setInt32(o, 3, true); o += 4;        // version
+    view.setUint32(o, 0, true); o += 4;       // original table count
+    view.setUint32(o, 1, true); o += 4;       // custom table count
+    ascii(o, 'hfoo'); o += 4;                 // oldId
+    ascii(o, 'h300'); o += 4;                 // newId
+    view.setUint32(o, 2, true); o += 4;       // set count
+    view.setInt32(o, 0, true); o += 4;        // set 0 flag
+    view.setUint32(o, 1, true); o += 4;       // set 0 mod count
+    ascii(o, 'uhpm'); o += 4;                 // mod id
+    view.setInt32(o, 0, true); o += 4;        // variable type int
+    view.setInt32(o, 777, true); o += 4;      // value
+    view.setInt32(o, 0, true); o += 4;        // end token
+    view.setInt32(o, 7, true); o += 4;        // set 1 flag
+    view.setUint32(o, 1, true); o += 4;       // set 1 mod count
+    ascii(o, 'unam'); o += 4;                 // mod id
+    view.setInt32(o, 3, true); o += 4;        // variable type string
+    ascii(o, str); o += str.length + 1;       // null-terminated value
+    view.setInt32(o, 0, true); o += 4;        // end token
+
+    const data = bytes.slice(0, o);
+    const file = new ObjectDataFile(false);
+    file.load(data);
+    expect(file.version).toBe(3);
+    const obj = file.customTable.objects[0];
+    expect(obj.oldId).toBe('hfoo');
+    expect(obj.newId).toBe('h300');
+    expect(obj.sets).toHaveLength(2);
+    expect(obj.sets[0].modifications[0].value).toBe(777);
+    expect(obj.sets[1].flag).toBe(7);
+    expect(obj.sets[1].modifications[0].value).toBe('Hi');
+    // And it must roundtrip byte-exactly.
+    expect(Buffer.compare(Buffer.from(file.save()), Buffer.from(data))).toBe(0);
+  });
+
+  it('ports from a v3 map, preserving sets, and emits a v3 drop', () => {
+    // Build a v3 source map with our serializer (gate verifies the roundtrip).
+    const w3u = new ObjectDataFile(false);
+    w3u.version = 3;
+    const unit = makeObject('hfoo', 'h300', [
+      { id: 'unam', type: 3, value: 'Sets Unit' },
+      { id: 'umdl', type: 3, value: 'war3mapImported\\Knight2.mdl' }, // .mdl ref, .mdx file
+    ]);
+    const extraSet = new ModificationSet();
+    extraSet.flag = 1;
+    const extraMod = new Modification();
+    extraMod.id = 'uhpm';
+    extraMod.variableType = 0;
+    extraMod.value = 1234;
+    extraSet.modifications.push(extraMod);
+    unit.sets.push(extraSet);
+    w3u.customTable.objects.push(unit);
+
+    const archive = new MpqArchive();
+    archive.resizeHashtable(8);
+    archive.set('war3map.w3u', w3u.save().slice().buffer as ArrayBuffer);
+    archive.set('war3mapImported\\Knight2.mdx', makeModel('Knight2', ['']).slice().buffer as ArrayBuffer);
+    const v3Path = join(dir, 'v3source.w3x');
+    writeFileSync(v3Path, archive.save()!);
+
+    // The gate accepts it.
+    const data = new MapData(v3Path);
+    expect(data.categories.get('units')!.file.version).toBe(3);
+    expect(data.categories.get('units')!.roundtrip.cosmetic).toBe(false);
+
+    const result = port({ sourcePath: v3Path, targetPath, outDir: join(dir, 'drop-v3'), all: true });
+    expect(result.objects).toHaveLength(1);
+
+    const { version, files } = loadW3o(readFileSync(result.w3oPath));
+    expect(version).toBe(1);
+    const units = files.units!;
+    expect(units.version).toBe(3);
+    const ported = units.customTable.objects[0];
+    expect(ported.sets).toHaveLength(2); // set structure preserved
+    expect(ported.sets[1].flag).toBe(1);
+    expect(ported.sets[1].modifications[0].value).toBe(1234);
+
+    // The .mdl reference resolved to the actual .mdx and was rewritten.
+    const umdl = ported.modifications.find((m) => m.id === 'umdl')!;
+    expect(umdl.value).toBe('war3mapImported\\Knight2.mdx');
+    expect(existsSync(join(result.outDir, 'war3mapImported/Knight2.mdx'))).toBe(true);
+  });
+});
+
+describe('cross-parser validation', () => {
+  it('v1/v2 files written by our serializer parse identically with the reference library parser', () => {
+    const data = new MapData(sourcePath);
+    for (const cat of data.categories.values()) {
+      if (cat.file.version > 2 || cat.def.optionalInts) {
+        continue;
+      }
+      const ours = cat.file.save();
+      const lib = new War3MapW3o(); // container check happens elsewhere; here use the raw file parser
+      void lib;
+      const reference = new (require('mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/file').default)();
+      reference.load(ours);
+      expect(reference.version).toBe(cat.file.version);
+      expect(reference.customTable.objects.length).toBe(cat.file.customTable.objects.length);
+      const refFirst = reference.customTable.objects[0];
+      const ourFirst = cat.file.customTable.objects[0];
+      expect(refFirst.newId).toBe(ourFirst.newId);
+      expect(refFirst.modifications.map((m: { id: string; value: unknown }) => [m.id, m.value])).toEqual(
+        ourFirst.modifications.map((m) => [m.id, m.value]),
+      );
+    }
   });
 });

@@ -3,7 +3,7 @@
  * unzipped Hive Workshop model download): pick a model, pick a base object,
  * get a ready-to-import unit/item/doodad/destructible using that model.
  */
-import { CategoryKey, Modification, ModifiedObject, PorterError } from './formats';
+import { CategoryKey, Modification, PorterError, W3Object } from './formats';
 import { isRawcode } from './ids';
 
 export interface FolderObjectSpec {
@@ -63,20 +63,21 @@ function stringMod(id: string, value: string): Modification {
  * allocated by the caller; the model/icon paths are stored as they appear in
  * the folder and are rewritten by the normal asset pipeline.
  */
-export function synthesizeObject(spec: FolderObjectSpec, newId: string): ModifiedObject {
+export function synthesizeObject(spec: FolderObjectSpec, newId: string): W3Object {
   const fields = FIELDS[spec.category];
   const baseId = spec.baseId ?? fields.base;
   if (!isRawcode(baseId)) {
     throw new PorterError(`'${baseId}' is not a valid base rawcode.`);
   }
 
-  const obj = new ModifiedObject();
+  const obj = new W3Object();
   obj.oldId = baseId;
   obj.newId = newId;
-  obj.modifications.push(stringMod(fields.nameField, spec.name));
-  obj.modifications.push(stringMod(fields.modelField, spec.modelPath));
+  const mods = obj.sets[0].modifications;
+  mods.push(stringMod(fields.nameField, spec.name));
+  mods.push(stringMod(fields.modelField, spec.modelPath));
   if (spec.iconPath && fields.iconField) {
-    obj.modifications.push(stringMod(fields.iconField, spec.iconPath));
+    mods.push(stringMod(fields.iconField, spec.iconPath));
   }
   return obj;
 }

@@ -14,6 +14,7 @@ import tgaHandler from 'mdx-m3-viewer/dist/cjs/viewer/handlers/tga/handler';
 import type Scene from 'mdx-m3-viewer/dist/cjs/viewer/scene';
 import type MdxModel from 'mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/model';
 import type MdxModelInstance from 'mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/modelinstance';
+import MdlxParserModel from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/model';
 import { vec3 } from 'gl-matrix';
 
 export interface PreviewSourceRef {
@@ -36,6 +37,8 @@ export class PreviewPanel {
   private canvas: HTMLCanvasElement;
   private status: HTMLElement;
   private sequenceSelect: HTMLSelectElement;
+  private lastError = '';
+  private errorCount = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -64,9 +67,12 @@ export class PreviewPanel {
     }
     try {
       const viewer = new ModelViewer(this.canvas);
-      viewer.on('error', () => {
+      viewer.on('error', (e: { error?: string; reason?: unknown; fetchUrl?: string }) => {
         // Individual resource failures (usually stock textures while offline)
-        // are tolerated; the model still renders.
+        // are tolerated; the model still renders. Keep the last one for
+        // display so failures aren't silent.
+        this.lastError = `${e.error ?? 'error'}${e.fetchUrl ? ` (${e.fetchUrl})` : ''}`;
+        this.errorCount++;
       });
       viewer.addHandler(blpHandler);
       viewer.addHandler(ddsHandler);
@@ -150,23 +156,43 @@ export class PreviewPanel {
       this.clear(`${label}: uses a standard game model (no custom model to preview).`);
       return;
     }
-    if (/\.mdl$/i.test(modelPath)) {
-      this.clear(`${label}: .mdl (text) models cannot be previewed yet.`);
-      return;
-    }
     if (!this.ensureViewer()) {
       return;
     }
 
     const token = ++this.loadToken;
     this.currentSource = source;
+    this.errorCount = 0;
+    this.lastError = '';
     this.setStatus(`Loading ${modelPath}…`);
 
-    const solver = (src: unknown): Promise<Uint8Array | null> => this.fetchFile(this.currentSource, String(src));
+    // Textures resolve as raw bytes. The model itself may come back as MDL
+    // text (fields reference .mdl and .mdx interchangeably); hand the viewer
+    // a parsed model in that case, since it only sniffs binary magic.
+    const modelSolver = async (src: unknown): Promise<unknown> => {
+      const path = String(src);
+      const bytes = await this.fetchFile(this.currentSource, path);
+      if (!bytes) {
+        return null;
+      }
+      const isModelPath = /\.(mdx|mdl)$/i.test(path);
+      const isMdxBinary =
+        bytes.byteLength > 4 && bytes[0] === 0x4d && bytes[1] === 0x44 && bytes[2] === 0x4c && bytes[3] === 0x58;
+      if (!isModelPath || isMdxBinary) {
+        return bytes;
+      }
+      try {
+        const parsed = new MdlxParserModel();
+        parsed.load(new TextDecoder().decode(bytes));
+        return parsed;
+      } catch {
+        return bytes; // Let the viewer's own detection have the final word.
+      }
+    };
 
     let model: MdxModel | undefined;
     try {
-      model = (await this.viewer!.load(modelPath, solver)) as MdxModel | undefined;
+      model = (await this.viewer!.load(modelPath, modelSolver)) as MdxModel | undefined;
     } catch (e) {
       model = undefined;
       if (token === this.loadToken) {
@@ -178,7 +204,9 @@ export class PreviewPanel {
       return; // A newer selection superseded this load.
     }
     if (!model || typeof (model as { addInstance?: unknown }).addInstance !== 'function') {
-      this.clear(`Could not load ${modelPath} (unsupported or missing).`);
+      this.clear(
+        `Could not load ${modelPath} (unsupported or missing).` + (this.lastError ? ` Last error: ${this.lastError}` : ''),
+      );
       return;
     }
 
@@ -214,6 +242,13 @@ export class PreviewPanel {
     this.targetZ = (bounds ? bounds.z : 0) + radius * 0.5;
 
     this.instance = instance;
+    // Give async texture loads a moment before summarizing missing ones.
+    setTimeout(() => {
+      if (token === this.loadToken) {
+        const missing = this.errorCount > 0 ? ` (${this.errorCount} texture(s) failed to load — offline?)` : '';
+        this.setStatus(`${label} — drag to rotate, scroll to zoom.${missing}`);
+      }
+    }, 1500);
     this.setStatus(`${label} — drag to rotate, scroll to zoom.`);
   }
 }

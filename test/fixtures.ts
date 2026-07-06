@@ -6,14 +6,7 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Texture from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/texture';
-import {
-  MdlxModel,
-  Modification,
-  ModifiedObject,
-  MpqArchive,
-  War3MapW3d,
-  War3MapW3u,
-} from '../src/formats';
+import { MdlxModel, Modification, MpqArchive, ObjectDataFile, W3Object } from '../src/formats';
 
 export function makeObject(
   oldId: string,
@@ -25,8 +18,8 @@ export function makeObject(
     level?: number;
     pointer?: number;
   }>,
-): ModifiedObject {
-  const obj = new ModifiedObject();
+): W3Object {
+  const obj = new W3Object();
   obj.oldId = oldId;
   obj.newId = newId;
   for (const def of mods) {
@@ -36,7 +29,7 @@ export function makeObject(
     mod.value = def.value;
     mod.levelOrVariation = def.level ?? 0;
     mod.dataPointer = def.pointer ?? 0;
-    obj.modifications.push(mod);
+    obj.sets[0].modifications.push(mod);
   }
   return obj;
 }
@@ -73,7 +66,7 @@ export interface SourceFixture {
  *   imports: CustomKnight.mdx (+ _portrait) referencing Textures\Knight.blp
  */
 export function writeSourceMap(dir: string): SourceFixture {
-  const w3u = new War3MapW3u();
+  const w3u = new ObjectDataFile(false);
   w3u.version = 2;
   w3u.customTable.objects.push(
     makeObject('hfoo', 'h000', [
@@ -90,7 +83,7 @@ export function writeSourceMap(dir: string): SourceFixture {
     makeObject('hpea', '\0\0\0\0', [{ id: 'uhpm', type: 0, value: 999 }]),
   );
 
-  const w3a = new War3MapW3d();
+  const w3a = new ObjectDataFile(true);
   w3a.version = 2;
   w3a.customTable.objects.push(
     makeObject('AHbz', 'A000', [
@@ -101,13 +94,13 @@ export function writeSourceMap(dir: string): SourceFixture {
     ]),
   );
 
-  const w3h = new War3MapW3u();
+  const w3h = new ObjectDataFile(false);
   w3h.version = 1;
   w3h.customTable.objects.push(
     makeObject('BPSE', 'B000', [{ id: 'fnam', type: 3, value: 'Custom Stun' }]),
   );
 
-  const w3t = new War3MapW3u();
+  const w3t = new ObjectDataFile(false);
   w3t.version = 2;
   w3t.customTable.objects.push(
     makeObject('ratc', 'I000', [{ id: 'unam', type: 3, value: 'Claws of Porting' }]),
@@ -140,7 +133,7 @@ export function writeSourceMap(dir: string): SourceFixture {
 
 /** Target map that already owns rawcodes h000 and h001. */
 export function writeTargetMap(dir: string): string {
-  const w3u = new War3MapW3u();
+  const w3u = new ObjectDataFile(false);
   w3u.version = 2;
   w3u.customTable.objects.push(
     makeObject('hpea', 'h000', [{ id: 'unam', type: 3, value: 'Existing Worker' }]),
