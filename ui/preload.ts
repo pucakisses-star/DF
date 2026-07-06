@@ -13,4 +13,6 @@ contextBridge.exposeInMainWorld('porter', {
   /** Real filesystem path of a dropped File (sandboxed renderers can't see it). */
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   classifyPath: (path: string) => ipcRenderer.invoke('classify-path', path),
+  saveProject: (json: string) => ipcRenderer.invoke('save-project', json),
+  loadProject: (knownPath?: string) => ipcRenderer.invoke('load-project', knownPath),
 });

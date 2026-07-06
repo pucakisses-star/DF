@@ -4,7 +4,7 @@
  * src/; nothing here touches map internals.
  */
 import { BrowserWindow, app, dialog, ipcMain, net, shell } from 'electron';
-import { statSync } from 'fs';
+import { readFileSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { PorterError } from '../src/formats';
 import { inspect } from '../src/inspect';
@@ -93,9 +93,52 @@ ipcMain.handle('classify-path', (_event, path: string) => {
     if (stats.isFile() && /\.(w3x|w3m|w3n)$/i.test(path)) {
       return { kind: 'map' as const, path };
     }
+    if (stats.isFile() && /\.wc3port$/i.test(path)) {
+      return { kind: 'project' as const, path };
+    }
     return { kind: 'unknown' as const, path };
   } catch {
     return { kind: 'unknown' as const, path };
+  }
+});
+
+// --- Project (save/load the whole porter list) -------------------------------
+
+const PROJECT_FILTERS = [
+  { name: 'WC3 Object Porter list', extensions: ['wc3port'] },
+  { name: 'All files', extensions: ['*'] },
+];
+
+ipcMain.handle('save-project', async (_event, json: string) => {
+  const result = await dialog.showSaveDialog({
+    title: 'Save porter list',
+    defaultPath: 'my-import.wc3port',
+    filters: PROJECT_FILTERS,
+  });
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+  writeFileSync(result.filePath, json);
+  return result.filePath;
+});
+
+ipcMain.handle('load-project', async (_event, knownPath?: string) => {
+  let path = knownPath;
+  if (!path) {
+    const result = await dialog.showOpenDialog({
+      title: 'Load porter list',
+      properties: ['openFile'],
+      filters: PROJECT_FILTERS,
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    path = result.filePaths[0];
+  }
+  try {
+    return { path, json: readFileSync(path, 'utf8') };
+  } catch (e) {
+    return { path, error: (e as Error).message };
   }
 });
 

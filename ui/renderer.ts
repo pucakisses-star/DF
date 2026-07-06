@@ -75,7 +75,9 @@ interface PorterBridge {
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
   getPathForFile(file: File): string;
-  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'unknown'; path: string }>;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'project' | 'unknown'; path: string }>;
+  saveProject(json: string): Promise<string | null>;
+  loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
 }
 
 declare global {
@@ -99,6 +101,8 @@ interface MapSourceState {
   path: string;
   data: InspectData;
   selected: Set<string>;
+  /** Objects deleted from the list entirely (still in the map, just hidden). */
+  removed: Set<string>;
   filter: string;
 }
 
@@ -194,6 +198,9 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
   const filter = source.filter.toLowerCase();
   const groups = new Map<string, InspectedObject[]>();
   for (const obj of data.objects) {
+    if (source.removed.has(obj.id)) {
+      continue;
+    }
     if (
       filter &&
       !obj.id.toLowerCase().includes(filter) &&
@@ -217,6 +224,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
       <button class="small" data-all="${idx}">Select all</button>
       <button class="small" data-none="${idx}">Select none</button>
       <input type="search" data-filter="${idx}" placeholder="Filter…" value="${escapeHtml(source.filter)}" />
+      ${source.removed.size > 0 ? `<button class="small" data-restore="${idx}">Restore ${source.removed.size} removed</button>` : ''}
     </div>
     <div class="objects">`;
 
@@ -232,6 +240,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
           <code>${escapeHtml(obj.id)}</code>
           <span class="name">${escapeHtml(obj.name ?? '(unnamed)')}</span>
           <span class="base">base: ${escapeHtml(obj.baseId)}</span>
+          <button class="small x-del" data-del="${idx}" data-id="${escapeHtml(obj.id)}" title="Remove from this list (does not change the map)">✕</button>
         </div>`;
     }
   }
@@ -297,7 +306,9 @@ $('sources').addEventListener('click', (e) => {
   if (all !== undefined) {
     const source = state.sources[Number(all)] as MapSourceState;
     for (const obj of source.data.objects) {
-      source.selected.add(obj.id);
+      if (!source.removed.has(obj.id)) {
+        source.selected.add(obj.id);
+      }
     }
     renderSources();
     return;
@@ -305,6 +316,24 @@ $('sources').addEventListener('click', (e) => {
   const none = target.dataset.none;
   if (none !== undefined) {
     (state.sources[Number(none)] as MapSourceState).selected.clear();
+    renderSources();
+    return;
+  }
+  const del = target.dataset.del;
+  if (del !== undefined) {
+    const source = state.sources[Number(del)] as MapSourceState;
+    const id = target.dataset.id!;
+    source.removed.add(id);
+    source.selected.delete(id);
+    if (state.previewing && state.previewing.sourceIdx === Number(del) && state.previewing.key === id) {
+      state.previewing = null;
+    }
+    renderSources();
+    return;
+  }
+  const restore = target.dataset.restore;
+  if (restore !== undefined) {
+    (state.sources[Number(restore)] as MapSourceState).removed.clear();
     renderSources();
     return;
   }
@@ -433,7 +462,7 @@ async function addMapByPath(path: string): Promise<void> {
   for (const obj of result.data.objects) {
     selected.add(obj.id); // everything selected by default
   }
-  state.sources.push({ kind: 'map', path, data: result.data, selected, filter: '' });
+  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '' });
   renderSources();
 }
 
@@ -665,6 +694,159 @@ async function showDetails(
   }
 }
 
+// --- Save / load the porter list -----------------------------------------------
+
+interface ProjectSource {
+  kind: 'map' | 'folder';
+  path: string;
+  selected?: string[];
+  removed?: string[];
+  category?: FolderSourceState['category'];
+  objectName?: string;
+  baseId?: string;
+  modelPath?: string;
+  iconPath?: string;
+}
+
+interface ProjectFile {
+  version: 1;
+  app: 'wc3-object-porter';
+  targetPath: string | null;
+  includeStandardMods: boolean;
+  sources: ProjectSource[];
+}
+
+function serializeProject(): ProjectFile {
+  return {
+    version: 1,
+    app: 'wc3-object-porter',
+    targetPath: state.targetPath,
+    includeStandardMods: $<HTMLInputElement>('opt-standard').checked,
+    sources: state.sources.map((source): ProjectSource => {
+      if (source.kind === 'map') {
+        return { kind: 'map', path: source.path, selected: [...source.selected], removed: [...source.removed] };
+      }
+      return {
+        kind: 'folder',
+        path: source.path,
+        category: source.category,
+        objectName: source.objectName,
+        baseId: source.baseId,
+        modelPath: source.modelPath,
+        iconPath: source.iconPath,
+      };
+    }),
+  };
+}
+
+async function saveList(): Promise<void> {
+  if (state.sources.length === 0 && !state.targetPath) {
+    alert('Nothing to save yet — add a source or target first.');
+    return;
+  }
+  const savedTo = await window.porter.saveProject(JSON.stringify(serializeProject(), null, 2));
+  if (savedTo) {
+    setStatus('target-status', 'good', `✓ List saved to ${escapeHtml(savedTo)}`);
+  }
+}
+
+async function loadList(knownPath?: string): Promise<void> {
+  const result = await window.porter.loadProject(knownPath);
+  if (!result) {
+    return;
+  }
+  if (result.error || !result.json) {
+    alert(`Could not read ${result.path}: ${result.error ?? 'empty file'}`);
+    return;
+  }
+  let project: ProjectFile;
+  try {
+    project = JSON.parse(result.json) as ProjectFile;
+    if (project.app !== 'wc3-object-porter' || project.version !== 1 || !Array.isArray(project.sources)) {
+      throw new Error('not a wc3-object-porter list');
+    }
+  } catch (e) {
+    alert(`${result.path} is not a valid porter list (${(e as Error).message}).`);
+    return;
+  }
+
+  // Replace the current session with the saved one, loading sequentially.
+  state.sources = [];
+  state.previewing = null;
+  preview.clear('Loading saved list…');
+  renderSources();
+
+  const problems: string[] = [];
+  for (const saved of project.sources) {
+    const before = state.sources.length;
+    if (saved.kind === 'map') {
+      await addMapByPath(saved.path);
+      const added = state.sources[before];
+      if (!added || added.kind !== 'map') {
+        problems.push(`${saved.path}: could not be reopened.`);
+        continue;
+      }
+      if (saved.selected) {
+        const available = new Set(added.data.objects.map((o) => o.id));
+        const wanted = saved.selected.filter((id) => available.has(id));
+        added.selected = new Set(wanted);
+        const missing = saved.selected.length - wanted.length;
+        if (missing > 0) {
+          problems.push(`${added.data.name}: ${missing} previously selected object(s) no longer exist in the map.`);
+        }
+      }
+      if (saved.removed) {
+        added.removed = new Set(saved.removed);
+        for (const id of added.removed) {
+          added.selected.delete(id);
+        }
+      }
+    } else {
+      await addFolderByPath(saved.path);
+      const added = state.sources[before];
+      if (!added || added.kind !== 'folder') {
+        problems.push(`${saved.path}: folder could not be reopened.`);
+        continue;
+      }
+      if (saved.category) {
+        added.category = saved.category;
+      }
+      if (saved.objectName) {
+        added.objectName = saved.objectName;
+      }
+      if (saved.baseId) {
+        added.baseId = saved.baseId;
+      }
+      if (saved.modelPath) {
+        if (added.info.models.includes(saved.modelPath)) {
+          added.modelPath = saved.modelPath;
+        } else {
+          problems.push(`${added.info.name}: saved model '${saved.modelPath}' is gone; using '${added.modelPath}'.`);
+        }
+      }
+      if (saved.iconPath !== undefined) {
+        if (saved.iconPath === '' || added.info.icons.includes(saved.iconPath)) {
+          added.iconPath = saved.iconPath;
+        } else {
+          problems.push(`${added.info.name}: saved icon '${saved.iconPath}' is gone.`);
+        }
+      }
+    }
+  }
+
+  $<HTMLInputElement>('opt-standard').checked = Boolean(project.includeStandardMods);
+  if (project.targetPath) {
+    await setTargetByPath(project.targetPath);
+  }
+  renderSources();
+
+  if (problems.length > 0) {
+    alert(`List loaded with warnings:\n\n${problems.join('\n')}`);
+  } else {
+    setStatus('target-status', 'good', `✓ List loaded from ${escapeHtml(result.path)}`);
+  }
+}
+
 // --- Drag & drop ---------------------------------------------------------------
 
 let dragDepth = 0;
@@ -704,8 +886,10 @@ async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
       }
     } else if (classified.kind === 'folder' && !asTarget) {
       await addFolderByPath(path);
+    } else if (classified.kind === 'project') {
+      await loadList(path);
     } else if (classified.kind === 'unknown') {
-      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n) or a folder — ignored.`);
+      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), folder, or .wc3port list — ignored.`);
     }
   }
 }
@@ -721,6 +905,8 @@ document.addEventListener('drop', (e) => {
 });
 
 $('btn-add-map').addEventListener('click', () => void addMapSource());
+$('btn-save-list').addEventListener('click', () => void saveList());
+$('btn-load-list').addEventListener('click', () => void loadList());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());
 $('btn-target').addEventListener('click', () => void chooseTarget());
 $('btn-port').addEventListener('click', () => void runPort());
