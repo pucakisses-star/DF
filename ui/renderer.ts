@@ -78,6 +78,7 @@ interface PorterBridge {
   classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'project' | 'unknown'; path: string }>;
   saveProject(json: string): Promise<string | null>;
   loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
+  stockModelPath(category: string, baseId: string): Promise<string | null>;
 }
 
 declare global {
@@ -366,7 +367,7 @@ $('sources').addEventListener('click', (e) => {
       }
       row.classList.add('previewing');
       const ref = { kind: 'map' as const, path: source.path };
-      void preview.show(ref, obj.modelPath, `${obj.name ?? obj.id} (${obj.id})`);
+      void previewObject(ref, obj);
       void showDetails(ref, {
         name: obj.name ?? obj.id,
         id: obj.id,
@@ -636,6 +637,34 @@ async function runPort(): Promise<void> {
     return;
   }
   renderResults(result.data);
+}
+
+/**
+ * Preview an object's model: its custom model if it has one, otherwise the
+ * standard model of its base object (resolved from the game's data tables,
+ * streamed from Hive when online).
+ */
+let previewRequest = 0;
+
+async function previewObject(ref: { kind: 'map' | 'folder'; path: string }, obj: InspectedObject): Promise<void> {
+  const request = ++previewRequest;
+  const label = `${obj.name ?? obj.id} (${obj.id})`;
+  if (obj.modelPath) {
+    await preview.show(ref, obj.modelPath, label);
+    return;
+  }
+  preview.clear(`${label}: looking up the standard model for base '${obj.baseId}'…`);
+  const stock = await window.porter.stockModelPath(obj.category, obj.baseId);
+  if (request !== previewRequest) {
+    return; // the user clicked something else while we were looking it up
+  }
+  if (stock) {
+    await preview.show(ref, stock, `${label} — standard model of '${obj.baseId}'`);
+  } else {
+    preview.clear(
+      `${label}: uses the standard model of '${obj.baseId}', which couldn't be resolved (offline, or no model for this type).`,
+    );
+  }
 }
 
 // --- Details panel -----------------------------------------------------------

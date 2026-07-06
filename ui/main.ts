@@ -11,6 +11,7 @@ import { inspect } from '../src/inspect';
 import { PortOptions, port } from '../src/porter';
 import { FolderData } from '../src/source';
 import { folderObjectDefaults } from '../src/folderobjects';
+import { MappedData } from 'mdx-m3-viewer/dist/cjs/utils/mappeddata';
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -230,6 +231,88 @@ ipcMain.handle(
     return null;
   },
 );
+
+// --- Standard-object model lookup (game data tables streamed from Hive) ------
+
+interface StockTables {
+  units: MappedData;
+  doodads: MappedData;
+}
+
+let stockTablesPromise: Promise<StockTables | null> | null = null;
+
+function loadStockTables(): Promise<StockTables | null> {
+  stockTablesPromise ??= (async () => {
+    const fetchText = async (path: string): Promise<string | null> => {
+      const bytes = await fetchFromHive(path);
+      return bytes ? new TextDecoder().decode(bytes) : null;
+    };
+    const [unitData, unitUi, itemData, doodads, destructables] = await Promise.all([
+      fetchText('Units\\UnitData.slk'),
+      fetchText('Units\\unitUI.slk'),
+      fetchText('Units\\ItemData.slk'),
+      fetchText('Doodads\\Doodads.slk'),
+      fetchText('Units\\DestructableData.slk'),
+    ]);
+    if (!unitUi && !doodads) {
+      return null; // offline
+    }
+    const units = new MappedData();
+    for (const text of [unitData, unitUi, itemData]) {
+      if (text) {
+        units.load(text);
+      }
+    }
+    const doodadsData = new MappedData();
+    for (const text of [doodads, destructables]) {
+      if (text) {
+        doodadsData.load(text);
+      }
+    }
+    return { units, doodads: doodadsData };
+  })();
+  return stockTablesPromise;
+}
+
+const stockModelCache = new Map<string, string | null>();
+
+ipcMain.handle('stock-model-path', async (_event, category: string, id: string) => {
+  const cacheKey = `${category}:${id}`;
+  const cached = stockModelCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let result: string | null = null;
+  try {
+    const tables = await loadStockTables();
+    if (tables) {
+      const table =
+        category === 'units' || category === 'items'
+          ? tables.units
+          : category === 'doodads' || category === 'destructables'
+            ? tables.doodads
+            : null;
+      const row = table?.getRow(id);
+      let file = row?.string('file');
+      if (file) {
+        if (/\.(mdl|mdx)$/i.test(file)) {
+          file = file.slice(0, -4);
+        }
+        // Doodads with variations store a base name; variation 0 is a safe pick.
+        for (const candidate of [`${file}.mdx`, `${file}0.mdx`]) {
+          if (await fetchFromHive(candidate)) {
+            result = candidate;
+            break;
+          }
+        }
+      }
+    }
+  } catch {
+    result = null;
+  }
+  stockModelCache.set(cacheKey, result);
+  return result;
+});
 
 // Used by CI to confirm the packaged main process boots.
 if (process.argv.includes('--smoke-test')) {

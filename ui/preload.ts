@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('porter', {
   classifyPath: (path: string) => ipcRenderer.invoke('classify-path', path),
   saveProject: (json: string) => ipcRenderer.invoke('save-project', json),
   loadProject: (knownPath?: string) => ipcRenderer.invoke('load-project', knownPath),
+  stockModelPath: (category: string, baseId: string) => ipcRenderer.invoke('stock-model-path', category, baseId),
 });
