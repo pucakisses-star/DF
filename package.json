@@ -1,0 +1,29 @@
+{
+  "name": "wc3-object-porter",
+  "version": "0.1.0",
+  "description": "Port Warcraft III custom objects (units, items, abilities, buffs, upgrades, doodads, destructibles) between maps safely: reads maps read-only and emits a .w3o + asset drop that the World Editor imports with its own code.",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "wc3-porter": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "cli": "tsx src/cli.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:41729/git/pucakisses-star/DF"
+  },
+  "dependencies": {
+    "mdx-m3-viewer": "^5.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
