@@ -4,6 +4,7 @@
  * src/; nothing here touches map internals.
  */
 import { BrowserWindow, app, dialog, ipcMain, net, shell } from 'electron';
+import { statSync } from 'fs';
 import { join } from 'path';
 import { PorterError } from '../src/formats';
 import { inspect } from '../src/inspect';
@@ -81,6 +82,22 @@ ipcMain.handle('inspect-folder', (_event, path: string) =>
 );
 
 ipcMain.handle('run-port', (_event, options: PortOptions) => wrap(() => port(options)));
+
+// Drag & drop: decide what a dropped path is.
+ipcMain.handle('classify-path', (_event, path: string) => {
+  try {
+    const stats = statSync(path);
+    if (stats.isDirectory()) {
+      return { kind: 'folder' as const, path };
+    }
+    if (stats.isFile() && /\.(w3x|w3m|w3n)$/i.test(path)) {
+      return { kind: 'map' as const, path };
+    }
+    return { kind: 'unknown' as const, path };
+  } catch {
+    return { kind: 'unknown' as const, path };
+  }
+});
 
 ipcMain.handle('open-path', (_event, path: string) => shell.openPath(path));
 

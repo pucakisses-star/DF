@@ -140,6 +140,26 @@
     #preview-canvas:active { cursor: grabbing; }
     #preview-status { min-height: 34px; }
     #sequence-select { margin-top: 8px; width: 100%; display: none; }
+    body.dropping .card { outline: 2px dashed var(--gold); outline-offset: -6px; }
+    #details { margin-top: 12px; display: none; }
+    #details .d-head { display: flex; gap: 12px; align-items: center; }
+    #icon-canvas {
+      width: 56px; height: 56px;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: #0e0b07; flex: none; display: none;
+    }
+    #details .d-title { min-width: 0; }
+    #details .d-title b { color: var(--gold); }
+    #details .d-title .path { display: block; }
+    #details dl { margin: 10px 0 0; }
+    #details dt { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    #details dd { margin: 3px 0 0; display: flex; flex-wrap: wrap; gap: 5px; }
+    .chip {
+      display: inline-block; padding: 1px 8px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--panel-2);
+      font-size: 12px; color: var(--muted);
+    }
+    .chip.custom { color: var(--gold); border-color: var(--gold-dim); }
   </style>
 </head>
 <body>
@@ -155,7 +175,7 @@
           <button id="btn-add-map">Add map / campaign…</button>
           <button id="btn-add-folder">Add asset folder (Hive download)…</button>
         </div>
-        <div class="hint">Add as many as you like: maps to take existing custom objects from, folders to turn downloaded models into brand-new objects. Click an object to preview its model on the right.</div>
+        <div class="hint">Add as many as you like — or just <b>drag &amp; drop</b> maps, campaigns and asset folders anywhere in the window (drop onto the Target card to set the target). Click an object to see its model, icon and details on the right.</div>
         <div id="sources"></div>
       </div>
 
@@ -190,7 +210,17 @@
         <h2>Model preview</h2>
         <canvas id="preview-canvas" width="760" height="680"></canvas>
         <select id="sequence-select"></select>
-        <div class="hint" id="preview-status">Click a unit, item, doodad or destructible to preview its model. Stock Blizzard textures load from hiveworkshop.com when online.</div>
+        <div class="hint" id="preview-status">Click any object to preview its model, icon and details. Stock Blizzard textures load from hiveworkshop.com when online.</div>
+        <div id="details">
+          <div class="d-head">
+            <canvas id="icon-canvas" width="64" height="64"></canvas>
+            <div class="d-title">
+              <b id="d-name"></b>
+              <span class="path" id="d-meta"></span>
+            </div>
+          </div>
+          <dl id="d-refs"></dl>
+        </div>
       </div>
     </div>
   </main>

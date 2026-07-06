@@ -2,7 +2,19 @@
  * Renderer logic. Talks to the main process only through the `porter` bridge
  * exposed by the preload script.
  */
-import { PreviewPanel } from './preview';
+import { PreviewPanel, renderIcon } from './preview';
+
+interface ObjectReference {
+  id: string;
+  name?: string;
+  custom: boolean;
+}
+
+interface ObjectRefField {
+  field: string;
+  label: string;
+  values: ObjectReference[];
+}
 
 interface InspectedObject {
   category: string;
@@ -11,6 +23,8 @@ interface InspectedObject {
   name?: string;
   modifications: number;
   modelPath?: string;
+  iconPath?: string;
+  refs: ObjectRefField[];
 }
 
 interface InspectData {
@@ -60,6 +74,8 @@ interface PorterBridge {
   openPath(path: string): Promise<void>;
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
+  getPathForFile(file: File): string;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'unknown'; path: string }>;
 }
 
 declare global {
@@ -297,7 +313,15 @@ $('sources').addEventListener('click', (e) => {
     const idx = Number(previewFolder);
     const source = state.sources[idx] as FolderSourceState;
     state.previewing = { sourceIdx: idx, key: 'folder' };
-    void preview.show({ kind: 'folder', path: source.path }, source.modelPath, source.objectName || source.info.name);
+    const ref = { kind: 'folder' as const, path: source.path };
+    void preview.show(ref, source.modelPath, source.objectName || source.info.name);
+    void showDetails(ref, {
+      name: source.objectName || source.info.name,
+      baseId: source.baseId,
+      category: source.category,
+      modelPath: source.modelPath,
+      iconPath: source.iconPath || undefined,
+    });
     return;
   }
   const row = target.closest<HTMLElement>('.obj-row');
@@ -312,7 +336,18 @@ $('sources').addEventListener('click', (e) => {
         el.classList.remove('previewing');
       }
       row.classList.add('previewing');
-      void preview.show({ kind: 'map', path: source.path }, obj.modelPath, `${obj.name ?? obj.id} (${obj.id})`);
+      const ref = { kind: 'map' as const, path: source.path };
+      void preview.show(ref, obj.modelPath, `${obj.name ?? obj.id} (${obj.id})`);
+      void showDetails(ref, {
+        name: obj.name ?? obj.id,
+        id: obj.id,
+        baseId: obj.baseId,
+        category: obj.category,
+        modelPath: obj.modelPath,
+        iconPath: obj.iconPath,
+        refs: obj.refs,
+        modifications: obj.modifications,
+      });
     }
   }
 });
@@ -379,8 +414,14 @@ $('sources').addEventListener('input', (e) => {
 
 async function addMapSource(): Promise<void> {
   const path = await window.porter.pickMap('Choose a source map or campaign');
-  if (!path) {
-    return;
+  if (path) {
+    await addMapByPath(path);
+  }
+}
+
+async function addMapByPath(path: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'map' && s.path === path)) {
+    return; // already added
   }
   const result = await window.porter.inspectMap(path);
   if (!result.ok) {
@@ -398,8 +439,14 @@ async function addMapSource(): Promise<void> {
 
 async function addFolderSource(): Promise<void> {
   const path = await window.porter.pickDir('Choose an unzipped asset folder (e.g. a Hive download)');
-  if (!path) {
-    return;
+  if (path) {
+    await addFolderByPath(path);
+  }
+}
+
+async function addFolderByPath(path: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'folder' && s.path === path)) {
+    return; // already added
   }
   const result = await window.porter.inspectFolder(path);
   if (!result.ok) {
@@ -426,9 +473,12 @@ async function addFolderSource(): Promise<void> {
 
 async function chooseTarget(): Promise<void> {
   const path = await window.porter.pickMap('Choose the target map or campaign');
-  if (!path) {
-    return;
+  if (path) {
+    await setTargetByPath(path);
   }
+}
+
+async function setTargetByPath(path: string): Promise<void> {
   state.targetPath = path;
   $('target-path').textContent = path;
   setStatus('target-status', '', 'Checking…');
@@ -558,6 +608,117 @@ async function runPort(): Promise<void> {
   }
   renderResults(result.data);
 }
+
+// --- Details panel -----------------------------------------------------------
+
+function escapeAttr(v: string): string {
+  return escapeHtml(v);
+}
+
+async function showDetails(
+  source: { kind: 'map' | 'folder'; path: string },
+  info: {
+    name: string;
+    id?: string;
+    baseId?: string;
+    category?: string;
+    modelPath?: string;
+    iconPath?: string;
+    refs?: ObjectRefField[];
+    modifications?: number;
+  },
+): Promise<void> {
+  const details = $('details');
+  details.style.display = 'block';
+  $('d-name').textContent = info.name || '(unnamed)';
+  const metaBits = [
+    info.id ? `${info.id}` : '',
+    info.baseId ? `base ${info.baseId}` : '',
+    info.category ? (CATEGORY_LABELS[info.category] ?? info.category) : '',
+    info.modifications !== undefined ? `${info.modifications} modified field(s)` : '',
+    info.modelPath ?? '',
+  ].filter(Boolean);
+  $('d-meta').textContent = metaBits.join(' · ');
+
+  const refsEl = $('d-refs');
+  refsEl.innerHTML = (info.refs ?? [])
+    .map(
+      (ref) =>
+        `<dt>${escapeHtml(ref.label)}</dt><dd>${ref.values
+          .map(
+            (v) =>
+              `<span class="chip${v.custom ? ' custom' : ''}" title="${escapeAttr(v.id)}">${escapeHtml(
+                v.name ? `${v.name} (${v.id})` : v.id,
+              )}</span>`,
+          )
+          .join('')}</dd>`,
+    )
+    .join('');
+
+  const iconCanvas = $('icon-canvas') as HTMLCanvasElement;
+  iconCanvas.style.display = 'none';
+  if (info.iconPath) {
+    const ok = await renderIcon(iconCanvas, (src, fp) => window.porter.previewFile(src, fp), source, info.iconPath);
+    if (ok) {
+      iconCanvas.style.display = 'block';
+    }
+  }
+}
+
+// --- Drag & drop ---------------------------------------------------------------
+
+let dragDepth = 0;
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add('dropping');
+});
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    document.body.classList.remove('dropping');
+  }
+});
+
+async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
+  const paths: string[] = [];
+  for (const file of files) {
+    try {
+      paths.push(window.porter.getPathForFile(file));
+    } catch {
+      // ignore non-filesystem drops
+    }
+  }
+  // Load strictly one after another so big maps don't race each other.
+  for (const path of paths) {
+    const classified = await window.porter.classifyPath(path);
+    if (classified.kind === 'map') {
+      if (asTarget) {
+        await setTargetByPath(path);
+      } else {
+        await addMapByPath(path);
+      }
+    } else if (classified.kind === 'folder' && !asTarget) {
+      await addFolderByPath(path);
+    } else if (classified.kind === 'unknown') {
+      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n) or a folder — ignored.`);
+    }
+  }
+}
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dropping');
+  if (e.dataTransfer?.files?.length) {
+    const onTarget = (e.target as HTMLElement).closest('#card-target') !== null;
+    void handleDrop(e.dataTransfer.files, onTarget);
+  }
+});
 
 $('btn-add-map').addEventListener('click', () => void addMapSource());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());

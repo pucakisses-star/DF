@@ -15,6 +15,7 @@ import type Scene from 'mdx-m3-viewer/dist/cjs/viewer/scene';
 import type MdxModel from 'mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/model';
 import type MdxModelInstance from 'mdx-m3-viewer/dist/cjs/viewer/handlers/mdx/modelinstance';
 import MdlxParserModel from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/model';
+import { BlpImage } from 'mdx-m3-viewer/dist/cjs/parsers/blp/image';
 import { vec3 } from 'gl-matrix';
 
 export interface PreviewSourceRef {
@@ -23,6 +24,38 @@ export interface PreviewSourceRef {
 }
 
 type FileFetcher = (source: PreviewSourceRef | null, filePath: string) => Promise<Uint8Array | null>;
+
+/**
+ * Renders a BLP icon into a small canvas. Returns false when the image isn't
+ * decodable (e.g. DDS/TGA icons, or a missing file).
+ */
+export async function renderIcon(
+  canvas: HTMLCanvasElement,
+  fetchFile: (source: PreviewSourceRef | null, filePath: string) => Promise<Uint8Array | null>,
+  source: PreviewSourceRef | null,
+  iconPath: string,
+): Promise<boolean> {
+  const bytes = await fetchFile(source, iconPath);
+  if (!bytes) {
+    return false;
+  }
+  try {
+    const blp = new BlpImage();
+    blp.load(bytes);
+    const imageData = blp.getMipmap(0);
+    const off = document.createElement('canvas');
+    off.width = imageData.width;
+    off.height = imageData.height;
+    off.getContext('2d')!.putImageData(imageData, 0, 0);
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export class PreviewPanel {
   private viewer: ModelViewer | null = null;

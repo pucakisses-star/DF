@@ -57,11 +57,15 @@ Node.js):
   objects from, and plain **asset folders** (e.g. unzipped Hive Workshop
   downloads) to turn a downloaded model into a brand-new unit, item, doodad
   or destructible — name, base object and icon included, textures re-pathed
-  automatically.
-- **Built-in 3D model preview**: click any object and its model renders in a
-  WebGL viewer with animations (drag to rotate, scroll to zoom). Textures load
-  from the source map/folder; stock Blizzard textures stream from
-  hiveworkshop.com when online.
+  automatically. Or just **drag & drop** maps and folders anywhere in the
+  window — they load one after another (drop onto the Target card to set the
+  target).
+- **Built-in 3D model preview with details**: click any object and its model
+  renders in a WebGL viewer with animations (drag to rotate, scroll to zoom),
+  alongside its icon and a details card showing its abilities, buffs, trained
+  units, upgrades and other references — custom references resolved to their
+  display names. Textures load from the source map/folder; stock Blizzard
+  textures stream from hiveworkshop.com when online.
 - Tick the objects you want, choose your target map or campaign, click *Build
   import drop*. Rawcode collisions are fixed across **all** sources and the
   target at once. The results view shows what was ported, which IDs were
