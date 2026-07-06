@@ -48,7 +48,21 @@ Applying the drop takes ~30 seconds in the World Editor:
 3. **Object Editor** → *File → Import Object Settings...* → pick `import.w3o`.
 4. Save. Done — the editor performed every write with its own code.
 
-## Standalone Windows build (no Node.js required)
+## Graphical app (easiest)
+
+**WC3ObjectPorter.exe** is a standalone desktop app (no installation, no
+Node.js): choose a source map, tick the objects you want, choose your target
+map or campaign, click *Build import drop*. It shows what was ported, which
+IDs were renamed, and the exact World Editor steps to apply the drop —
+with buttons to open the drop folder and the full report.
+
+Download it from the *Build Windows executable* workflow run (repo **Actions**
+tab → latest run → `wc3-object-porter-gui-windows` artifact), or from a
+Release when one is published. To build it yourself: `npm run gui:package` →
+`release-gui/WC3ObjectPorter.exe`. During development, `npm run gui` launches
+it from source.
+
+## Standalone CLI build (no Node.js required)
 
 A packaged `wc3-porter.exe` is built by the *Build Windows executable* GitHub
 Actions workflow: open the repo's **Actions** tab, pick the latest run, and

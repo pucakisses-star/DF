@@ -3,21 +3,45 @@
   "version": "0.1.0",
   "description": "Port Warcraft III custom objects (units, items, abilities, buffs, upgrades, doodads, destructibles) between maps safely: reads maps read-only and emits a .w3o + asset drop that the World Editor imports with its own code.",
   "license": "MIT",
+  "author": "pucakisses-star",
   "type": "commonjs",
   "bin": {
     "wc3-porter": "dist/cli.js"
   },
-  "main": "dist/index.js",
+  "main": "build/ui/main.js",
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "cli": "tsx src/cli.ts",
     "bundle": "esbuild dist/cli.js --bundle --platform=node --target=node22 --outfile=build/cli.bundle.cjs",
-    "package:win": "npm run build && npm run bundle && pkg build/cli.bundle.cjs -t node22-win-x64 -o release/wc3-porter.exe"
+    "package:win": "npm run build && npm run bundle && pkg build/cli.bundle.cjs -t node22-win-x64 -o release/wc3-porter.exe",
+    "typecheck:ui": "tsc -p tsconfig.ui.json",
+    "gui:build": "npm run typecheck:ui && esbuild ui/main.ts ui/preload.ts --bundle --platform=node --format=cjs --external:electron --outdir=build/ui && esbuild ui/renderer.ts --bundle --platform=browser --format=iife --outfile=build/ui/renderer.js && node -e \"require('fs').copyFileSync('ui/index.html','build/ui/index.html')\"",
+    "gui": "npm run gui:build && electron .",
+    "gui:package": "npm run gui:build && electron-builder --win portable"
   },
   "repository": {
     "type": "git",
     "url": "http://local_proxy@127.0.0.1:41729/git/pucakisses-star/DF"
+  },
+  "build": {
+    "appId": "com.wc3objectporter.app",
+    "productName": "WC3 Object Porter",
+    "files": [
+      "build/ui/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release-gui"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "WC3ObjectPorter.exe"
+    }
   },
   "dependencies": {
     "mdx-m3-viewer": "^5.12.0"
@@ -25,6 +49,8 @@
   "devDependencies": {
     "@types/node": "^26.1.0",
     "@yao-pkg/pkg": "^6.21.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
