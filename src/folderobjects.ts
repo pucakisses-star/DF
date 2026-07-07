@@ -81,14 +81,32 @@ export function suggestName(modelName: string | undefined, modelPath: string): s
   return pretty.length > 0 ? pretty : stem.replace(/\.(mdx|mdl)$/i, '');
 }
 
+const FLYING_WORDS = [
+  'dragon', 'drake', 'wyrm', 'wyvern', 'bat', 'gargoyle', 'gryphon', 'griffin', 'hippogryph',
+  'phoenix', 'hawk', 'eagle', 'owl', 'raven', 'crow', 'bird', 'chimera', 'chimaera', 'zeppelin',
+  'balloon', 'wisp', 'fly', 'wing',
+];
+const RANGED_WORDS = [
+  'archer', 'rifle', 'gunner', 'gun', 'bow', 'crossbow', 'hunter', 'huntress', 'thrower', 'sniper',
+  'mage', 'magi', 'priest', 'sorcer', 'shaman', 'warlock', 'necro', 'wizard', 'witch', 'druid',
+  'caster', 'acolyte', 'lich',
+];
+
+function matchesAny(haystack: string, words: string[]): string | null {
+  const lower = haystack.toLowerCase();
+  return words.find((w) => lower.includes(w)) ?? null;
+}
+
 /**
  * Guess what kind of object a model is meant for, from its animation
  * sequences: units walk, buildings are born/upgraded/work, destructibles die,
- * doodads mostly just stand there.
+ * doodads mostly just stand there. Units are refined into flying (name hints,
+ * or geometry floating well above the ground plane) and ranged (name hints).
  */
-export function suggestObjectFromModel(modelBytes: Uint8Array): ObjectSuggestion {
+export function suggestObjectFromModel(modelBytes: Uint8Array, nameHint = ''): ObjectSuggestion {
   let sequences: string[] = [];
   let modelName: string | undefined;
+  let floatsAboveGround = false;
   try {
     const model = new MdlxModel();
     const isMdx =
@@ -97,16 +115,48 @@ export function suggestObjectFromModel(modelBytes: Uint8Array): ObjectSuggestion
     model.load(isMdx ? modelBytes : new TextDecoder().decode(modelBytes));
     sequences = model.sequences.map((s) => s.name.toLowerCase());
     modelName = model.name || undefined;
+    // Flying models are usually authored hovering: their bounding box starts
+    // well above z=0, where ground units have their feet.
+    const minZ = model.extent?.min?.[2];
+    floatsAboveGround = typeof minZ === 'number' && minZ > 25;
   } catch {
     // Unparseable model: fall through to the unit default.
   }
   const has = (word: string): boolean => sequences.some((n) => n.includes(word));
+  const names = `${modelName ?? ''} ${nameHint}`;
+  const flyingWord = matchesAny(names, FLYING_WORDS);
+  const rangedWord = matchesAny(names, RANGED_WORDS);
+
+  const unitKind = (walkReason: string): ObjectSuggestion => {
+    if (flyingWord || floatsAboveGround) {
+      return {
+        category: 'units',
+        baseId: 'hgry',
+        label: 'Flying unit',
+        reason: flyingWord ? `${walkReason} and the name mentions "${flyingWord}"` : `${walkReason} and the model floats above the ground plane`,
+        modelName,
+      };
+    }
+    if (rangedWord) {
+      return {
+        category: 'units',
+        baseId: 'hrif',
+        label: 'Ranged unit',
+        reason: `${walkReason} and the name mentions "${rangedWord}"`,
+        modelName,
+      };
+    }
+    return { category: 'units', baseId: 'hfoo', label: 'Melee unit', reason: walkReason, modelName };
+  };
 
   if (has('walk')) {
-    return { category: 'units', baseId: 'hfoo', label: 'Unit', reason: 'the model has Walk animations', modelName };
+    return unitKind('the model has Walk animations');
   }
   if (has('birth') || has('upgrade') || has('work')) {
     return { category: 'units', baseId: 'hhou', label: 'Building', reason: 'the model has Birth/Work/Upgrade animations', modelName };
+  }
+  if ((flyingWord || floatsAboveGround) && has('stand')) {
+    return unitKind('the model hovers');
   }
   if (has('death') || has('decay')) {
     return {

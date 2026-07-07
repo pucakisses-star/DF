@@ -499,7 +499,7 @@ describe('lone model files and auto-classification', () => {
   it('classifies models by their animation sequences', () => {
     const withSeqs = (names: string[]): Uint8Array => makeModel('T', [], names);
 
-    expect(suggestObjectFromModel(withSeqs(['Stand', 'Walk', 'Attack - 1', 'Death'])).label).toBe('Unit');
+    expect(suggestObjectFromModel(withSeqs(['Stand', 'Walk', 'Attack - 1', 'Death'])).label).toBe('Melee unit');
     expect(suggestObjectFromModel(withSeqs(['Birth', 'Stand', 'Stand Work', 'Death'])).label).toBe('Building');
     expect(suggestObjectFromModel(withSeqs(['Stand', 'Death'])).label).toBe('Destructible');
     expect(suggestObjectFromModel(withSeqs(['Stand', 'Stand Hit'])).label).toBe('Doodad');
@@ -520,5 +520,33 @@ describe('auto-naming', () => {
     expect(suggestName('VarokSaurfang', 'model123.mdx')).toBe('Varok Saurfang');
     expect(suggestName(undefined, 'FrostWyrm.mdx')).toBe('Frost Wyrm');
     expect(suggestName('', 'a.mdx')).toBe('A');
+  });
+});
+
+describe('flying/ranged refinement', () => {
+  const walker = ['Stand', 'Walk', 'Attack', 'Death'];
+
+  it('detects flying units by name keywords', () => {
+    const s = suggestObjectFromModel(makeModel('FrostWyrm', [], walker), 'FrostWyrm.mdx');
+    expect(s.label).toBe('Flying unit');
+    expect(s.baseId).toBe('hgry');
+  });
+
+  it('detects flying units by geometry floating above the ground', () => {
+    const bytes = makeModel('Mystery', [], walker, 60);
+    const s = suggestObjectFromModel(bytes, 'Mystery.mdx');
+    expect(s.label).toBe('Flying unit');
+  });
+
+  it('detects ranged units by name keywords', () => {
+    const s = suggestObjectFromModel(makeModel('DwarfRifleman', [], walker), 'DwarfRifleman.mdx');
+    expect(s.label).toBe('Ranged unit');
+    expect(s.baseId).toBe('hrif');
+  });
+
+  it('defaults to melee for plain walkers', () => {
+    const s = suggestObjectFromModel(makeModel('Swordsman', [], walker), 'Swordsman.mdx');
+    expect(s.label).toBe('Melee unit');
+    expect(s.baseId).toBe('hfoo');
   });
 });

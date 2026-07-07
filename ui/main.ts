@@ -93,7 +93,7 @@ ipcMain.handle('suggest-object', (_event, folderPath: string, recursive: boolean
     if (!bytes) {
       throw new PorterError(`${modelPath}: not found in the folder.`);
     }
-    const suggestion = suggestObjectFromModel(bytes);
+    const suggestion = suggestObjectFromModel(bytes, `${modelPath} ${folder.name}`);
     return {
       ...suggestion,
       iconPath: suggestIcon(icons) ?? '',

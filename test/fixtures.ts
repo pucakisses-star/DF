@@ -39,10 +39,16 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer;
 }
 
-export function makeModel(name: string, texturePaths: string[], sequenceNames: string[] = []): Uint8Array {
+export function makeModel(
+  name: string,
+  texturePaths: string[],
+  sequenceNames: string[] = [],
+  extentMinZ = 0,
+): Uint8Array {
   const model = new MdlxModel();
   model.version = 800;
   model.name = name;
+  model.extent.min[2] = extentMinZ;
   for (const path of texturePaths) {
     const texture = new Texture();
     texture.path = path;
