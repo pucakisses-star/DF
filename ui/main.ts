@@ -4,12 +4,14 @@
  * src/; nothing here touches map internals.
  */
 import { BrowserWindow, app, dialog, ipcMain, net, shell } from 'electron';
+import { readFileSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { PorterError } from '../src/formats';
 import { inspect } from '../src/inspect';
 import { PortOptions, port } from '../src/porter';
 import { FolderData } from '../src/source';
 import { folderObjectDefaults } from '../src/folderobjects';
+import { MappedData } from 'mdx-m3-viewer/dist/cjs/utils/mappeddata';
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -81,6 +83,65 @@ ipcMain.handle('inspect-folder', (_event, path: string) =>
 );
 
 ipcMain.handle('run-port', (_event, options: PortOptions) => wrap(() => port(options)));
+
+// Drag & drop: decide what a dropped path is.
+ipcMain.handle('classify-path', (_event, path: string) => {
+  try {
+    const stats = statSync(path);
+    if (stats.isDirectory()) {
+      return { kind: 'folder' as const, path };
+    }
+    if (stats.isFile() && /\.(w3x|w3m|w3n)$/i.test(path)) {
+      return { kind: 'map' as const, path };
+    }
+    if (stats.isFile() && /\.wc3port$/i.test(path)) {
+      return { kind: 'project' as const, path };
+    }
+    return { kind: 'unknown' as const, path };
+  } catch {
+    return { kind: 'unknown' as const, path };
+  }
+});
+
+// --- Project (save/load the whole porter list) -------------------------------
+
+const PROJECT_FILTERS = [
+  { name: 'WC3 Object Porter list', extensions: ['wc3port'] },
+  { name: 'All files', extensions: ['*'] },
+];
+
+ipcMain.handle('save-project', async (_event, json: string) => {
+  const result = await dialog.showSaveDialog({
+    title: 'Save porter list',
+    defaultPath: 'my-import.wc3port',
+    filters: PROJECT_FILTERS,
+  });
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+  writeFileSync(result.filePath, json);
+  return result.filePath;
+});
+
+ipcMain.handle('load-project', async (_event, knownPath?: string) => {
+  let path = knownPath;
+  if (!path) {
+    const result = await dialog.showOpenDialog({
+      title: 'Load porter list',
+      properties: ['openFile'],
+      filters: PROJECT_FILTERS,
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+    path = result.filePaths[0];
+  }
+  try {
+    return { path, json: readFileSync(path, 'utf8') };
+  } catch (e) {
+    return { path, error: (e as Error).message };
+  }
+});
 
 ipcMain.handle('open-path', (_event, path: string) => shell.openPath(path));
 
@@ -170,6 +231,88 @@ ipcMain.handle(
     return null;
   },
 );
+
+// --- Standard-object model lookup (game data tables streamed from Hive) ------
+
+interface StockTables {
+  units: MappedData;
+  doodads: MappedData;
+}
+
+let stockTablesPromise: Promise<StockTables | null> | null = null;
+
+function loadStockTables(): Promise<StockTables | null> {
+  stockTablesPromise ??= (async () => {
+    const fetchText = async (path: string): Promise<string | null> => {
+      const bytes = await fetchFromHive(path);
+      return bytes ? new TextDecoder().decode(bytes) : null;
+    };
+    const [unitData, unitUi, itemData, doodads, destructables] = await Promise.all([
+      fetchText('Units\\UnitData.slk'),
+      fetchText('Units\\unitUI.slk'),
+      fetchText('Units\\ItemData.slk'),
+      fetchText('Doodads\\Doodads.slk'),
+      fetchText('Units\\DestructableData.slk'),
+    ]);
+    if (!unitUi && !doodads) {
+      return null; // offline
+    }
+    const units = new MappedData();
+    for (const text of [unitData, unitUi, itemData]) {
+      if (text) {
+        units.load(text);
+      }
+    }
+    const doodadsData = new MappedData();
+    for (const text of [doodads, destructables]) {
+      if (text) {
+        doodadsData.load(text);
+      }
+    }
+    return { units, doodads: doodadsData };
+  })();
+  return stockTablesPromise;
+}
+
+const stockModelCache = new Map<string, string | null>();
+
+ipcMain.handle('stock-model-path', async (_event, category: string, id: string) => {
+  const cacheKey = `${category}:${id}`;
+  const cached = stockModelCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let result: string | null = null;
+  try {
+    const tables = await loadStockTables();
+    if (tables) {
+      const table =
+        category === 'units' || category === 'items'
+          ? tables.units
+          : category === 'doodads' || category === 'destructables'
+            ? tables.doodads
+            : null;
+      const row = table?.getRow(id);
+      let file = row?.string('file');
+      if (file) {
+        if (/\.(mdl|mdx)$/i.test(file)) {
+          file = file.slice(0, -4);
+        }
+        // Doodads with variations store a base name; variation 0 is a safe pick.
+        for (const candidate of [`${file}.mdx`, `${file}0.mdx`]) {
+          if (await fetchFromHive(candidate)) {
+            result = candidate;
+            break;
+          }
+        }
+      }
+    }
+  } catch {
+    result = null;
+  }
+  stockModelCache.set(cacheKey, result);
+  return result;
+});
 
 // Used by CI to confirm the packaged main process boots.
 if (process.argv.includes('--smoke-test')) {

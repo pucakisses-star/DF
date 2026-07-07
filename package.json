@@ -1,6 +1,6 @@
 {
   "name": "wc3-object-porter",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Port Warcraft III custom objects (units, items, abilities, buffs, upgrades, doodads, destructibles) between maps safely: reads maps read-only and emits a .w3o + asset drop that the World Editor imports with its own code.",
   "license": "MIT",
   "author": "pucakisses-star",

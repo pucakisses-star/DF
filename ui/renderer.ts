@@ -2,7 +2,19 @@
  * Renderer logic. Talks to the main process only through the `porter` bridge
  * exposed by the preload script.
  */
-import { PreviewPanel } from './preview';
+import { PreviewPanel, renderIcon } from './preview';
+
+interface ObjectReference {
+  id: string;
+  name?: string;
+  custom: boolean;
+}
+
+interface ObjectRefField {
+  field: string;
+  label: string;
+  values: ObjectReference[];
+}
 
 interface InspectedObject {
   category: string;
@@ -11,6 +23,8 @@ interface InspectedObject {
   name?: string;
   modifications: number;
   modelPath?: string;
+  iconPath?: string;
+  refs: ObjectRefField[];
 }
 
 interface InspectData {
@@ -60,6 +74,11 @@ interface PorterBridge {
   openPath(path: string): Promise<void>;
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
+  getPathForFile(file: File): string;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'project' | 'unknown'; path: string }>;
+  saveProject(json: string): Promise<string | null>;
+  loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
+  stockModelPath(category: string, baseId: string): Promise<string | null>;
 }
 
 declare global {
@@ -83,6 +102,8 @@ interface MapSourceState {
   path: string;
   data: InspectData;
   selected: Set<string>;
+  /** Objects deleted from the list entirely (still in the map, just hidden). */
+  removed: Set<string>;
   filter: string;
 }
 
@@ -178,6 +199,9 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
   const filter = source.filter.toLowerCase();
   const groups = new Map<string, InspectedObject[]>();
   for (const obj of data.objects) {
+    if (source.removed.has(obj.id)) {
+      continue;
+    }
     if (
       filter &&
       !obj.id.toLowerCase().includes(filter) &&
@@ -201,6 +225,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
       <button class="small" data-all="${idx}">Select all</button>
       <button class="small" data-none="${idx}">Select none</button>
       <input type="search" data-filter="${idx}" placeholder="Filter…" value="${escapeHtml(source.filter)}" />
+      ${source.removed.size > 0 ? `<button class="small" data-restore="${idx}">Restore ${source.removed.size} removed</button>` : ''}
     </div>
     <div class="objects">`;
 
@@ -216,6 +241,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
           <code>${escapeHtml(obj.id)}</code>
           <span class="name">${escapeHtml(obj.name ?? '(unnamed)')}</span>
           <span class="base">base: ${escapeHtml(obj.baseId)}</span>
+          <button class="small x-del" data-del="${idx}" data-id="${escapeHtml(obj.id)}" title="Remove from this list (does not change the map)">✕</button>
         </div>`;
     }
   }
@@ -281,7 +307,9 @@ $('sources').addEventListener('click', (e) => {
   if (all !== undefined) {
     const source = state.sources[Number(all)] as MapSourceState;
     for (const obj of source.data.objects) {
-      source.selected.add(obj.id);
+      if (!source.removed.has(obj.id)) {
+        source.selected.add(obj.id);
+      }
     }
     renderSources();
     return;
@@ -292,12 +320,38 @@ $('sources').addEventListener('click', (e) => {
     renderSources();
     return;
   }
+  const del = target.dataset.del;
+  if (del !== undefined) {
+    const source = state.sources[Number(del)] as MapSourceState;
+    const id = target.dataset.id!;
+    source.removed.add(id);
+    source.selected.delete(id);
+    if (state.previewing && state.previewing.sourceIdx === Number(del) && state.previewing.key === id) {
+      state.previewing = null;
+    }
+    renderSources();
+    return;
+  }
+  const restore = target.dataset.restore;
+  if (restore !== undefined) {
+    (state.sources[Number(restore)] as MapSourceState).removed.clear();
+    renderSources();
+    return;
+  }
   const previewFolder = target.dataset.previewFolder;
   if (previewFolder !== undefined) {
     const idx = Number(previewFolder);
     const source = state.sources[idx] as FolderSourceState;
     state.previewing = { sourceIdx: idx, key: 'folder' };
-    void preview.show({ kind: 'folder', path: source.path }, source.modelPath, source.objectName || source.info.name);
+    const ref = { kind: 'folder' as const, path: source.path };
+    void preview.show(ref, source.modelPath, source.objectName || source.info.name);
+    void showDetails(ref, {
+      name: source.objectName || source.info.name,
+      baseId: source.baseId,
+      category: source.category,
+      modelPath: source.modelPath,
+      iconPath: source.iconPath || undefined,
+    });
     return;
   }
   const row = target.closest<HTMLElement>('.obj-row');
@@ -312,7 +366,18 @@ $('sources').addEventListener('click', (e) => {
         el.classList.remove('previewing');
       }
       row.classList.add('previewing');
-      void preview.show({ kind: 'map', path: source.path }, obj.modelPath, `${obj.name ?? obj.id} (${obj.id})`);
+      const ref = { kind: 'map' as const, path: source.path };
+      void previewObject(ref, obj);
+      void showDetails(ref, {
+        name: obj.name ?? obj.id,
+        id: obj.id,
+        baseId: obj.baseId,
+        category: obj.category,
+        modelPath: obj.modelPath,
+        iconPath: obj.iconPath,
+        refs: obj.refs,
+        modifications: obj.modifications,
+      });
     }
   }
 });
@@ -379,8 +444,14 @@ $('sources').addEventListener('input', (e) => {
 
 async function addMapSource(): Promise<void> {
   const path = await window.porter.pickMap('Choose a source map or campaign');
-  if (!path) {
-    return;
+  if (path) {
+    await addMapByPath(path);
+  }
+}
+
+async function addMapByPath(path: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'map' && s.path === path)) {
+    return; // already added
   }
   const result = await window.porter.inspectMap(path);
   if (!result.ok) {
@@ -392,14 +463,20 @@ async function addMapSource(): Promise<void> {
   for (const obj of result.data.objects) {
     selected.add(obj.id); // everything selected by default
   }
-  state.sources.push({ kind: 'map', path, data: result.data, selected, filter: '' });
+  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '' });
   renderSources();
 }
 
 async function addFolderSource(): Promise<void> {
   const path = await window.porter.pickDir('Choose an unzipped asset folder (e.g. a Hive download)');
-  if (!path) {
-    return;
+  if (path) {
+    await addFolderByPath(path);
+  }
+}
+
+async function addFolderByPath(path: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'folder' && s.path === path)) {
+    return; // already added
   }
   const result = await window.porter.inspectFolder(path);
   if (!result.ok) {
@@ -426,9 +503,12 @@ async function addFolderSource(): Promise<void> {
 
 async function chooseTarget(): Promise<void> {
   const path = await window.porter.pickMap('Choose the target map or campaign');
-  if (!path) {
-    return;
+  if (path) {
+    await setTargetByPath(path);
   }
+}
+
+async function setTargetByPath(path: string): Promise<void> {
   state.targetPath = path;
   $('target-path').textContent = path;
   setStatus('target-status', '', 'Checking…');
@@ -559,7 +639,303 @@ async function runPort(): Promise<void> {
   renderResults(result.data);
 }
 
+/**
+ * Preview an object's model: its custom model if it has one, otherwise the
+ * standard model of its base object (resolved from the game's data tables,
+ * streamed from Hive when online).
+ */
+let previewRequest = 0;
+
+async function previewObject(ref: { kind: 'map' | 'folder'; path: string }, obj: InspectedObject): Promise<void> {
+  const request = ++previewRequest;
+  const label = `${obj.name ?? obj.id} (${obj.id})`;
+  if (obj.modelPath) {
+    await preview.show(ref, obj.modelPath, label);
+    return;
+  }
+  preview.clear(`${label}: looking up the standard model for base '${obj.baseId}'…`);
+  const stock = await window.porter.stockModelPath(obj.category, obj.baseId);
+  if (request !== previewRequest) {
+    return; // the user clicked something else while we were looking it up
+  }
+  if (stock) {
+    await preview.show(ref, stock, `${label} — standard model of '${obj.baseId}'`);
+  } else {
+    preview.clear(
+      `${label}: uses the standard model of '${obj.baseId}', which couldn't be resolved (offline, or no model for this type).`,
+    );
+  }
+}
+
+// --- Details panel -----------------------------------------------------------
+
+function escapeAttr(v: string): string {
+  return escapeHtml(v);
+}
+
+async function showDetails(
+  source: { kind: 'map' | 'folder'; path: string },
+  info: {
+    name: string;
+    id?: string;
+    baseId?: string;
+    category?: string;
+    modelPath?: string;
+    iconPath?: string;
+    refs?: ObjectRefField[];
+    modifications?: number;
+  },
+): Promise<void> {
+  const details = $('details');
+  details.style.display = 'block';
+  $('d-name').textContent = info.name || '(unnamed)';
+  const metaBits = [
+    info.id ? `${info.id}` : '',
+    info.baseId ? `base ${info.baseId}` : '',
+    info.category ? (CATEGORY_LABELS[info.category] ?? info.category) : '',
+    info.modifications !== undefined ? `${info.modifications} modified field(s)` : '',
+    info.modelPath ?? '',
+  ].filter(Boolean);
+  $('d-meta').textContent = metaBits.join(' · ');
+
+  const refsEl = $('d-refs');
+  refsEl.innerHTML = (info.refs ?? [])
+    .map(
+      (ref) =>
+        `<dt>${escapeHtml(ref.label)}</dt><dd>${ref.values
+          .map(
+            (v) =>
+              `<span class="chip${v.custom ? ' custom' : ''}" title="${escapeAttr(v.id)}">${escapeHtml(
+                v.name ? `${v.name} (${v.id})` : v.id,
+              )}</span>`,
+          )
+          .join('')}</dd>`,
+    )
+    .join('');
+
+  const iconCanvas = $('icon-canvas') as HTMLCanvasElement;
+  iconCanvas.style.display = 'none';
+  if (info.iconPath) {
+    const ok = await renderIcon(iconCanvas, (src, fp) => window.porter.previewFile(src, fp), source, info.iconPath);
+    if (ok) {
+      iconCanvas.style.display = 'block';
+    }
+  }
+}
+
+// --- Save / load the porter list -----------------------------------------------
+
+interface ProjectSource {
+  kind: 'map' | 'folder';
+  path: string;
+  selected?: string[];
+  removed?: string[];
+  category?: FolderSourceState['category'];
+  objectName?: string;
+  baseId?: string;
+  modelPath?: string;
+  iconPath?: string;
+}
+
+interface ProjectFile {
+  version: 1;
+  app: 'wc3-object-porter';
+  targetPath: string | null;
+  includeStandardMods: boolean;
+  sources: ProjectSource[];
+}
+
+function serializeProject(): ProjectFile {
+  return {
+    version: 1,
+    app: 'wc3-object-porter',
+    targetPath: state.targetPath,
+    includeStandardMods: $<HTMLInputElement>('opt-standard').checked,
+    sources: state.sources.map((source): ProjectSource => {
+      if (source.kind === 'map') {
+        return { kind: 'map', path: source.path, selected: [...source.selected], removed: [...source.removed] };
+      }
+      return {
+        kind: 'folder',
+        path: source.path,
+        category: source.category,
+        objectName: source.objectName,
+        baseId: source.baseId,
+        modelPath: source.modelPath,
+        iconPath: source.iconPath,
+      };
+    }),
+  };
+}
+
+async function saveList(): Promise<void> {
+  if (state.sources.length === 0 && !state.targetPath) {
+    alert('Nothing to save yet — add a source or target first.');
+    return;
+  }
+  const savedTo = await window.porter.saveProject(JSON.stringify(serializeProject(), null, 2));
+  if (savedTo) {
+    setStatus('target-status', 'good', `✓ List saved to ${escapeHtml(savedTo)}`);
+  }
+}
+
+async function loadList(knownPath?: string): Promise<void> {
+  const result = await window.porter.loadProject(knownPath);
+  if (!result) {
+    return;
+  }
+  if (result.error || !result.json) {
+    alert(`Could not read ${result.path}: ${result.error ?? 'empty file'}`);
+    return;
+  }
+  let project: ProjectFile;
+  try {
+    project = JSON.parse(result.json) as ProjectFile;
+    if (project.app !== 'wc3-object-porter' || project.version !== 1 || !Array.isArray(project.sources)) {
+      throw new Error('not a wc3-object-porter list');
+    }
+  } catch (e) {
+    alert(`${result.path} is not a valid porter list (${(e as Error).message}).`);
+    return;
+  }
+
+  // Replace the current session with the saved one, loading sequentially.
+  state.sources = [];
+  state.previewing = null;
+  preview.clear('Loading saved list…');
+  renderSources();
+
+  const problems: string[] = [];
+  for (const saved of project.sources) {
+    const before = state.sources.length;
+    if (saved.kind === 'map') {
+      await addMapByPath(saved.path);
+      const added = state.sources[before];
+      if (!added || added.kind !== 'map') {
+        problems.push(`${saved.path}: could not be reopened.`);
+        continue;
+      }
+      if (saved.selected) {
+        const available = new Set(added.data.objects.map((o) => o.id));
+        const wanted = saved.selected.filter((id) => available.has(id));
+        added.selected = new Set(wanted);
+        const missing = saved.selected.length - wanted.length;
+        if (missing > 0) {
+          problems.push(`${added.data.name}: ${missing} previously selected object(s) no longer exist in the map.`);
+        }
+      }
+      if (saved.removed) {
+        added.removed = new Set(saved.removed);
+        for (const id of added.removed) {
+          added.selected.delete(id);
+        }
+      }
+    } else {
+      await addFolderByPath(saved.path);
+      const added = state.sources[before];
+      if (!added || added.kind !== 'folder') {
+        problems.push(`${saved.path}: folder could not be reopened.`);
+        continue;
+      }
+      if (saved.category) {
+        added.category = saved.category;
+      }
+      if (saved.objectName) {
+        added.objectName = saved.objectName;
+      }
+      if (saved.baseId) {
+        added.baseId = saved.baseId;
+      }
+      if (saved.modelPath) {
+        if (added.info.models.includes(saved.modelPath)) {
+          added.modelPath = saved.modelPath;
+        } else {
+          problems.push(`${added.info.name}: saved model '${saved.modelPath}' is gone; using '${added.modelPath}'.`);
+        }
+      }
+      if (saved.iconPath !== undefined) {
+        if (saved.iconPath === '' || added.info.icons.includes(saved.iconPath)) {
+          added.iconPath = saved.iconPath;
+        } else {
+          problems.push(`${added.info.name}: saved icon '${saved.iconPath}' is gone.`);
+        }
+      }
+    }
+  }
+
+  $<HTMLInputElement>('opt-standard').checked = Boolean(project.includeStandardMods);
+  if (project.targetPath) {
+    await setTargetByPath(project.targetPath);
+  }
+  renderSources();
+
+  if (problems.length > 0) {
+    alert(`List loaded with warnings:\n\n${problems.join('\n')}`);
+  } else {
+    setStatus('target-status', 'good', `✓ List loaded from ${escapeHtml(result.path)}`);
+  }
+}
+
+// --- Drag & drop ---------------------------------------------------------------
+
+let dragDepth = 0;
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add('dropping');
+});
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    document.body.classList.remove('dropping');
+  }
+});
+
+async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
+  const paths: string[] = [];
+  for (const file of files) {
+    try {
+      paths.push(window.porter.getPathForFile(file));
+    } catch {
+      // ignore non-filesystem drops
+    }
+  }
+  // Load strictly one after another so big maps don't race each other.
+  for (const path of paths) {
+    const classified = await window.porter.classifyPath(path);
+    if (classified.kind === 'map') {
+      if (asTarget) {
+        await setTargetByPath(path);
+      } else {
+        await addMapByPath(path);
+      }
+    } else if (classified.kind === 'folder' && !asTarget) {
+      await addFolderByPath(path);
+    } else if (classified.kind === 'project') {
+      await loadList(path);
+    } else if (classified.kind === 'unknown') {
+      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), folder, or .wc3port list — ignored.`);
+    }
+  }
+}
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove('dropping');
+  if (e.dataTransfer?.files?.length) {
+    const onTarget = (e.target as HTMLElement).closest('#card-target') !== null;
+    void handleDrop(e.dataTransfer.files, onTarget);
+  }
+});
+
 $('btn-add-map').addEventListener('click', () => void addMapSource());
+$('btn-save-list').addEventListener('click', () => void saveList());
+$('btn-load-list').addEventListener('click', () => void loadList());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());
 $('btn-target').addEventListener('click', () => void chooseTarget());
 $('btn-port').addEventListener('click', () => void runPort());
