@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 contextBridge.exposeInMainWorld('porter', {
   pickMap: (title: string) => ipcRenderer.invoke('pick-map', title),
   pickDir: (title: string) => ipcRenderer.invoke('pick-dir', title),
+  pickModel: (title: string) => ipcRenderer.invoke('pick-model', title),
   inspectMap: (path: string) => ipcRenderer.invoke('inspect-map', path),
   inspectFolder: (path: string, recursive?: boolean) => ipcRenderer.invoke('inspect-folder', path, recursive),
   suggestObject: (folderPath: string, recursive: boolean, modelPath: string, icons: string[]) =>

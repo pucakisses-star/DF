@@ -77,6 +77,7 @@ type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 interface PorterBridge {
   pickMap(title: string): Promise<string | null>;
   pickDir(title: string): Promise<string | null>;
+  pickModel(title: string): Promise<string | null>;
   inspectMap(path: string): Promise<IpcResult<InspectData>>;
   inspectFolder(path: string, recursive?: boolean): Promise<IpcResult<FolderInfo>>;
   suggestObject(folderPath: string, recursive: boolean, modelPath: string, icons: string[]): Promise<IpcResult<ObjectSuggestion>>;
@@ -115,6 +116,8 @@ interface MapSourceState {
   /** Objects deleted from the list entirely (still in the map, just hidden). */
   removed: Set<string>;
   filter: string;
+  /** When true, hide objects that have no custom model (use a stock game model). */
+  modelsOnly: boolean;
 }
 
 interface FolderSourceState {
@@ -213,8 +216,13 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
   const { data } = source;
   const filter = source.filter.toLowerCase();
   const groups = new Map<string, InspectedObject[]>();
+  let hiddenByModelFilter = 0;
   for (const obj of data.objects) {
     if (source.removed.has(obj.id)) {
+      continue;
+    }
+    if (source.modelsOnly && !obj.modelPath) {
+      hiddenByModelFilter++;
       continue;
     }
     if (
@@ -240,6 +248,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
       <button class="small" data-all="${idx}">Select all</button>
       <button class="small" data-none="${idx}">Select none</button>
       <input type="search" data-filter="${idx}" placeholder="Filter…" value="${escapeHtml(source.filter)}" />
+      <button class="small${source.modelsOnly ? ' toggle-on' : ''}" data-models-only="${idx}" title="Show only objects that have a custom model (hide ones using stock game models)">${source.modelsOnly ? '✓ ' : ''}Custom models only</button>
       ${source.removed.size > 0 ? `<button class="small" data-restore="${idx}">Restore ${source.removed.size} removed</button>` : ''}
     </div>
     <div class="objects">`;
@@ -261,6 +270,9 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
     }
   }
   html += '</div>';
+  if (source.modelsOnly && hiddenByModelFilter > 0) {
+    html += `<div class="hint">Hiding ${hiddenByModelFilter} object(s) with no custom model.</div>`;
+  }
   for (const warning of data.warnings) {
     html += `<div class="status warn">⚠ ${escapeHtml(warning)}</div>`;
   }
@@ -356,6 +368,24 @@ function applyClosureSelection(idx: number, id: string, select: boolean): void {
   $('port-hint').textContent = `${select ? 'Selected' : 'Deselected'} ${id}${others > 0 ? ` and ${others} object(s) it references` : ''}.`;
 }
 
+/** Show a folder source's model + icon in the right-hand preview panel. */
+function previewFolder(idx: number): void {
+  const source = state.sources[idx];
+  if (!source || source.kind !== 'folder') {
+    return;
+  }
+  state.previewing = { sourceIdx: idx, key: 'folder' };
+  const ref = { kind: 'folder' as const, path: source.path, recursive: source.recursive };
+  void preview.show(ref, source.modelPath, source.objectName || source.info.name);
+  void showDetails(ref, {
+    name: source.objectName || source.info.name,
+    baseId: source.baseId,
+    category: source.category,
+    modelPath: source.modelPath,
+    iconPath: source.iconPath || undefined,
+  });
+}
+
 // --- Event delegation --------------------------------------------------------
 
 $('sources').addEventListener('click', (e) => {
@@ -364,6 +394,13 @@ $('sources').addEventListener('click', (e) => {
   // (click fires after the checkbox state flips, so `checked` is the NEW state)
   if (e.shiftKey && target instanceof HTMLInputElement && target.dataset.check !== undefined) {
     applyClosureSelection(Number(target.dataset.check), target.dataset.id!, target.checked);
+    return;
+  }
+  const modelsOnly = target.dataset.modelsOnly;
+  if (modelsOnly !== undefined) {
+    const source = state.sources[Number(modelsOnly)] as MapSourceState;
+    source.modelsOnly = !source.modelsOnly;
+    renderSources();
     return;
   }
   const remove = target.dataset.remove;
@@ -409,20 +446,9 @@ $('sources').addEventListener('click', (e) => {
     renderSources();
     return;
   }
-  const previewFolder = target.dataset.previewFolder;
-  if (previewFolder !== undefined) {
-    const idx = Number(previewFolder);
-    const source = state.sources[idx] as FolderSourceState;
-    state.previewing = { sourceIdx: idx, key: 'folder' };
-    const ref = { kind: 'folder' as const, path: source.path, recursive: source.recursive };
-    void preview.show(ref, source.modelPath, source.objectName || source.info.name);
-    void showDetails(ref, {
-      name: source.objectName || source.info.name,
-      baseId: source.baseId,
-      category: source.category,
-      modelPath: source.modelPath,
-      iconPath: source.iconPath || undefined,
-    });
+  const previewFolderBtn = target.dataset.previewFolder;
+  if (previewFolderBtn !== undefined) {
+    previewFolder(Number(previewFolderBtn));
     return;
   }
   const row = target.closest<HTMLElement>('.obj-row');
@@ -466,27 +492,34 @@ $('sources').addEventListener('change', (e) => {
     updatePortButton();
     return;
   }
-  for (const [attr, apply] of [
-    ['fCategory', (s: FolderSourceState, v: string) => {
-      s.category = v as FolderSourceState['category'];
-      s.baseId = s.info.defaults[s.category].baseId;
-    }],
-    ['fName', (s: FolderSourceState, v: string) => (s.objectName = v)],
-    ['fModel', (s: FolderSourceState, v: string) => {
-      s.modelPath = v;
-      void applySuggestion(s);
-    }],
-    ['fIcon', (s: FolderSourceState, v: string) => (s.iconPath = v)],
-    ['fBase', (s: FolderSourceState, v: string) => (s.baseId = v)],
-  ] as const) {
-    const idx = target.dataset[attr];
-    if (idx !== undefined) {
-      apply(state.sources[Number(idx)] as FolderSourceState, target.value);
-      if (attr === 'fCategory') {
-        renderSources();
-      }
-      return;
-    }
+  // Folder object form: model/icon changes update the preview immediately.
+  if (target.dataset.fCategory !== undefined) {
+    const idx = Number(target.dataset.fCategory);
+    const s = state.sources[idx] as FolderSourceState;
+    s.category = target.value as FolderSourceState['category'];
+    s.baseId = s.info.defaults[s.category].baseId;
+    renderSources();
+    previewFolder(idx);
+    return;
+  }
+  if (target.dataset.fModel !== undefined) {
+    const idx = Number(target.dataset.fModel);
+    const s = state.sources[idx] as FolderSourceState;
+    s.modelPath = target.value;
+    previewFolder(idx); // update the 3D viewer right away
+    void applySuggestion(s).then(() => previewFolder(idx));
+    return;
+  }
+  if (target.dataset.fIcon !== undefined) {
+    const idx = Number(target.dataset.fIcon);
+    const s = state.sources[idx] as FolderSourceState;
+    s.iconPath = target.value;
+    previewFolder(idx); // refresh the icon shown below the model
+    return;
+  }
+  if (target.dataset.fBase !== undefined) {
+    (state.sources[Number(target.dataset.fBase)] as FolderSourceState).baseId = target.value;
+    return;
   }
 });
 
@@ -539,8 +572,18 @@ async function addMapByPath(path: string): Promise<void> {
   for (const obj of result.data.objects) {
     selected.add(obj.id); // everything selected by default
   }
-  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '' });
+  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '', modelsOnly: false });
   renderSources();
+}
+
+async function addModelSource(): Promise<void> {
+  const path = await window.porter.pickModel('Choose a model file (.mdx / .mdl)');
+  if (!path) {
+    return;
+  }
+  const norm = path.replace(/\\/g, '/');
+  const slash = norm.lastIndexOf('/');
+  await addFolderByPath(path.slice(0, slash), false, norm.slice(slash + 1));
 }
 
 async function addFolderSource(): Promise<void> {
@@ -579,9 +622,12 @@ async function addFolderByPath(path: string, recursive = true, preferredModel?: 
     modelPath,
     iconPath: '',
   };
+  const idx = state.sources.length;
   state.sources.push(source);
   renderSources();
   await applySuggestion(source);
+  // Auto-show the new object's model and icon without a manual click.
+  previewFolder(idx);
 }
 
 /** Ask the model what it wants to be, and prefill the form accordingly. */
@@ -1042,6 +1088,7 @@ document.addEventListener('drop', (e) => {
 });
 
 $('btn-add-map').addEventListener('click', () => void addMapSource());
+$('btn-add-model').addEventListener('click', () => void addModelSource());
 $('btn-save-list').addEventListener('click', () => void saveList());
 $('btn-load-list').addEventListener('click', () => void loadList());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());

@@ -63,6 +63,18 @@ ipcMain.handle('pick-dir', async (_event, title: string) => {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
+ipcMain.handle('pick-model', async (_event, title: string) => {
+  const result = await dialog.showOpenDialog({
+    title,
+    properties: ['openFile'],
+    filters: [
+      { name: 'Warcraft III models', extensions: ['mdx', 'mdl'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
 ipcMain.handle('inspect-map', (_event, path: string) => wrap(() => inspect(path)));
 
 ipcMain.handle('inspect-folder', (_event, path: string, recursive?: boolean) =>

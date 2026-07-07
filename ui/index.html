@@ -162,6 +162,7 @@
     .chip.custom { color: var(--gold); border-color: var(--gold-dim); }
     .x-del { border: none; background: none; color: var(--muted); padding: 0 4px; font-size: 12px; }
     .x-del:hover { color: var(--bad) !important; border: none !important; }
+    button.small.toggle-on { background: var(--gold); color: #221a08; border-color: var(--gold); }
   </style>
 </head>
 <body>
@@ -175,7 +176,8 @@
         <h2>1 &nbsp;Sources</h2>
         <div class="row">
           <button id="btn-add-map">Add map / campaign…</button>
-          <button id="btn-add-folder">Add asset folder (Hive download)…</button>
+          <button id="btn-add-model">Add model file…</button>
+          <button id="btn-add-folder">Add asset folder…</button>
           <span style="flex:1"></span>
           <button id="btn-save-list" title="Save the whole list (sources, ticked objects, target, options) to a .wc3port file">Save list…</button>
           <button id="btn-load-list" title="Load a saved .wc3port list">Load list…</button>
