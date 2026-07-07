@@ -291,10 +291,66 @@ function renderFolderSource(block: HTMLElement, source: FolderSourceState, idx: 
     </div>`;
 }
 
+/**
+ * All custom objects reachable from `id` through reference fields (abilities,
+ * their buffs, trained units, upgrades, items, ...), including `id` itself.
+ */
+function dependencyClosure(source: MapSourceState, id: string): Set<string> {
+  const byId = new Map(source.data.objects.map((o) => [o.id, o]));
+  const closure = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (closure.has(current)) {
+      continue;
+    }
+    closure.add(current);
+    const obj = byId.get(current);
+    if (!obj) {
+      continue;
+    }
+    for (const ref of obj.refs) {
+      for (const value of ref.values) {
+        if (value.custom && !closure.has(value.id)) {
+          queue.push(value.id);
+        }
+      }
+    }
+  }
+  return closure;
+}
+
+/** Shift-click on a checkbox: tick/untick the object AND its whole dependency chain. */
+function applyClosureSelection(idx: number, id: string, select: boolean): void {
+  const source = state.sources[idx];
+  if (!source || source.kind !== 'map') {
+    return;
+  }
+  const closure = dependencyClosure(source, id);
+  for (const depId of closure) {
+    if (select) {
+      if (!source.removed.has(depId)) {
+        source.selected.add(depId);
+      }
+    } else {
+      source.selected.delete(depId);
+    }
+  }
+  renderSources();
+  const others = closure.size - 1;
+  $('port-hint').textContent = `${select ? 'Selected' : 'Deselected'} ${id}${others > 0 ? ` and ${others} object(s) it references` : ''}.`;
+}
+
 // --- Event delegation --------------------------------------------------------
 
 $('sources').addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
+  // Shift-click a checkbox: select/deselect its whole dependency chain.
+  // (click fires after the checkbox state flips, so `checked` is the NEW state)
+  if (e.shiftKey && target instanceof HTMLInputElement && target.dataset.check !== undefined) {
+    applyClosureSelection(Number(target.dataset.check), target.dataset.id!, target.checked);
+    return;
+  }
   const remove = target.dataset.remove;
   if (remove !== undefined) {
     state.sources.splice(Number(remove), 1);
