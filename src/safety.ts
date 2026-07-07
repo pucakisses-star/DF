@@ -28,15 +28,11 @@ interface PlainModification {
   u1: number;
 }
 
-interface PlainSet {
-  flag: number;
-  modifications: PlainModification[];
-}
-
 interface PlainObject {
   oldId: string;
   newId: string;
-  sets: PlainSet[];
+  unk: number[];
+  modifications: PlainModification[];
 }
 
 export interface PlainObjectFile {
@@ -49,16 +45,14 @@ export function toPlain(file: ObjectFile): PlainObjectFile {
   const mapObject = (o: W3Object): PlainObject => ({
     oldId: o.oldId,
     newId: o.newId,
-    sets: o.sets.map((set) => ({
-      flag: set.flag,
-      modifications: set.modifications.map((m) => ({
-        id: m.id,
-        variableType: m.variableType,
-        levelOrVariation: m.levelOrVariation,
-        dataPointer: m.dataPointer,
-        value: m.value,
-        u1: m.u1,
-      })),
+    unk: [...o.unk],
+    modifications: o.modifications.map((m) => ({
+      id: m.id,
+      variableType: m.variableType,
+      levelOrVariation: m.levelOrVariation,
+      dataPointer: m.dataPointer,
+      value: m.value,
+      u1: m.u1,
     })),
   });
 

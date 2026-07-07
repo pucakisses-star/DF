@@ -29,7 +29,7 @@ export function makeObject(
     mod.value = def.value;
     mod.levelOrVariation = def.level ?? 0;
     mod.dataPointer = def.pointer ?? 0;
-    obj.sets[0].modifications.push(mod);
+    obj.modifications.push(mod);
   }
   return obj;
 }
