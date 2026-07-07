@@ -73,11 +73,10 @@ export function synthesizeObject(spec: FolderObjectSpec, newId: string): W3Objec
   const obj = new W3Object();
   obj.oldId = baseId;
   obj.newId = newId;
-  const mods = obj.sets[0].modifications;
-  mods.push(stringMod(fields.nameField, spec.name));
-  mods.push(stringMod(fields.modelField, spec.modelPath));
+  obj.modifications.push(stringMod(fields.nameField, spec.name));
+  obj.modifications.push(stringMod(fields.modelField, spec.modelPath));
   if (spec.iconPath && fields.iconField) {
-    mods.push(stringMod(fields.iconField, spec.iconPath));
+    obj.modifications.push(stringMod(fields.iconField, spec.iconPath));
   }
   return obj;
 }

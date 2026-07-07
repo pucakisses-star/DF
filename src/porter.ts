@@ -20,7 +20,6 @@ import {
   CATEGORIES,
   CategoryKey,
   Modification,
-  ModificationSet,
   PorterError,
   W3Object,
   newObjectFile,
@@ -117,20 +116,16 @@ function cloneObject(obj: W3Object): W3Object {
   const copy = new W3Object();
   copy.oldId = obj.oldId;
   copy.newId = obj.newId;
-  copy.sets = obj.sets.map((set) => {
-    const sc = new ModificationSet();
-    sc.flag = set.flag;
-    sc.modifications = set.modifications.map((m) => {
-      const mc = new Modification();
-      mc.id = m.id;
-      mc.variableType = m.variableType;
-      mc.levelOrVariation = m.levelOrVariation;
-      mc.dataPointer = m.dataPointer;
-      mc.value = m.value;
-      mc.u1 = m.u1;
-      return mc;
-    });
-    return sc;
+  copy.unk = [...obj.unk];
+  copy.modifications = obj.modifications.map((m) => {
+    const mc = new Modification();
+    mc.id = m.id;
+    mc.variableType = m.variableType;
+    mc.levelOrVariation = m.levelOrVariation;
+    mc.dataPointer = m.dataPointer;
+    mc.value = m.value;
+    mc.u1 = m.u1;
+    return mc;
   });
   return copy;
 }

@@ -4,8 +4,7 @@
  *
  * This is the ONE place this project serializes a Warcraft III binary format
  * itself, and only because the underlying library stops at format version 2:
- * Reforged 1.33+ writes version 3, which adds "modification sets" per object.
- * Two guards keep this safe:
+ * Reforged 1.33+ writes version 3. Two guards keep this safe:
  *
  *   1. Individual modifications still load/save through the library's
  *      Modification class (value typing is where corruption bugs live).
@@ -13,61 +12,47 @@
  *      a misunderstanding of the framing aborts the run, it never ships bytes.
  *
  * Version 1/2 object framing:  oldId newId modCount mods[]
- * Version 3 object framing:    oldId newId setCount (setFlag modCount mods[])[]
+ * Version 3 object framing:    oldId newId unkCount unk[] modCount mods[]
+ *
+ * The v3 int list is undocumented (usually empty, sometimes a single 0); it is
+ * preserved verbatim. This layout matches War3Net's reference implementation —
+ * note it is NOT a list of (flag, mods) sets: files where the list is empty
+ * would misparse under that interpretation.
  */
 import BinaryStream from 'mdx-m3-viewer/dist/cjs/common/binarystream';
 import Modification from 'mdx-m3-viewer/dist/cjs/parsers/w3x/w3u/modification';
 
 export { Modification };
 
-export class ModificationSet {
-  /** Meaning undocumented; the World Editor writes 0. Preserved verbatim. */
-  flag = 0;
-  modifications: Modification[] = [];
-}
-
 export class W3Object {
   oldId = '\0\0\0\0';
   newId = '\0\0\0\0';
-  sets: ModificationSet[] = [new ModificationSet()];
-
-  /**
-   * Flat view over all sets' modifications. The Modification instances are
-   * shared with the sets, so in-place edits through this view stick.
-   */
-  get modifications(): Modification[] {
-    if (this.sets.length === 1) {
-      return this.sets[0].modifications;
-    }
-    return this.sets.flatMap((s) => s.modifications);
-  }
+  /** v3-only undocumented int list, preserved verbatim (empty on v1/v2). */
+  unk: number[] = [];
+  modifications: Modification[] = [];
 
   load(stream: BinaryStream, version: number, optionalInts: boolean): void {
     this.oldId = stream.readBinary(4);
     this.newId = stream.readBinary(4);
-    this.sets = [];
-    const setCount = version >= 3 ? stream.readUint32() : 1;
-    if (setCount > 100000) {
-      throw new Error(`implausible modification set count ${setCount}`);
+    this.unk = [];
+    if (version >= 3) {
+      const unkCount = stream.readUint32();
+      if (unkCount > 100000) {
+        throw new Error(`implausible v3 int-list count ${unkCount}`);
+      }
+      for (let i = 0; i < unkCount; i++) {
+        this.unk.push(stream.readInt32());
+      }
     }
-    for (let s = 0; s < setCount; s++) {
-      const set = new ModificationSet();
-      if (version >= 3) {
-        set.flag = stream.readInt32();
-      }
-      const modCount = stream.readUint32();
-      if (modCount > 1000000) {
-        throw new Error(`implausible modification count ${modCount}`);
-      }
-      for (let m = 0; m < modCount; m++) {
-        const mod = new Modification();
-        mod.load(stream, optionalInts);
-        set.modifications.push(mod);
-      }
-      this.sets.push(set);
+    const modCount = stream.readUint32();
+    if (modCount > 1000000) {
+      throw new Error(`implausible modification count ${modCount}`);
     }
-    if (this.sets.length === 0) {
-      this.sets.push(new ModificationSet());
+    this.modifications = [];
+    for (let m = 0; m < modCount; m++) {
+      const mod = new Modification();
+      mod.load(stream, optionalInts);
+      this.modifications.push(mod);
     }
   }
 
@@ -75,38 +60,24 @@ export class W3Object {
     stream.writeBinary(this.oldId);
     stream.writeBinary(this.newId);
     if (version >= 3) {
-      stream.writeUint32(this.sets.length);
-      for (const set of this.sets) {
-        stream.writeInt32(set.flag);
-        stream.writeUint32(set.modifications.length);
-        for (const mod of set.modifications) {
-          mod.save(stream, optionalInts);
-        }
+      stream.writeUint32(this.unk.length);
+      for (const value of this.unk) {
+        stream.writeInt32(value);
       }
-    } else {
-      const mods = this.modifications;
-      stream.writeUint32(mods.length);
-      for (const mod of mods) {
-        mod.save(stream, optionalInts);
-      }
+    }
+    stream.writeUint32(this.modifications.length);
+    for (const mod of this.modifications) {
+      mod.save(stream, optionalInts);
     }
   }
 
   getByteLength(version: number, optionalInts: boolean): number {
-    let size = 8;
+    let size = 8 + 4;
     if (version >= 3) {
-      size += 4;
-      for (const set of this.sets) {
-        size += 8;
-        for (const mod of set.modifications) {
-          size += mod.getByteLength(optionalInts);
-        }
-      }
-    } else {
-      size += 4;
-      for (const mod of this.modifications) {
-        size += mod.getByteLength(optionalInts);
-      }
+      size += 4 + this.unk.length * 4;
+    }
+    for (const mod of this.modifications) {
+      size += mod.getByteLength(optionalInts);
     }
     return size;
   }

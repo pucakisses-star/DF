@@ -12,7 +12,7 @@ import War3MapWts from 'mdx-m3-viewer/dist/cjs/parsers/w3x/wts/file';
 import War3MapImp from 'mdx-m3-viewer/dist/cjs/parsers/w3x/imp/file';
 import MdlxModel from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/model';
 import MpqArchive from 'mdx-m3-viewer/dist/cjs/parsers/mpq/archive';
-import { Modification, ModificationSet, ObjectDataFile, W3Object } from './objectdata';
+import { Modification, ObjectDataFile, W3Object } from './objectdata';
 
 export {
   War3Map,
@@ -22,7 +22,6 @@ export {
   War3MapWts,
   War3MapImp,
   Modification,
-  ModificationSet,
   ObjectDataFile,
   W3Object,
   MdlxModel,

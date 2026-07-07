@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { MdlxModel, Modification, ModificationSet, MpqArchive, ObjectDataFile, PorterError, War3MapW3o } from '../src/formats';
+import { MdlxModel, MpqArchive, ObjectDataFile, PorterError, War3MapW3o } from '../src/formats';
 import { loadW3o } from '../src/w3o';
 import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
@@ -336,10 +336,11 @@ describe('folder sources (Hive downloads)', () => {
   });
 });
 
-describe('Reforged 1.33+ object data (format v3, modification sets)', () => {
+describe('Reforged 1.33+ object data (format v3)', () => {
   it('parses a hand-assembled v3 byte layout exactly as documented', () => {
-    // version=3; originalTable empty; customTable: 1 object with 2 sets:
-    // set0 (flag 0) holds one int mod, set1 (flag 7) holds one string mod.
+    // version=3; originalTable empty; customTable: 2 objects.
+    // Object 1: EMPTY v3 int list (the case that used to misparse), 1 int mod.
+    // Object 2: int list [7, 9], 1 string mod.
     const str = 'Hi';
     const bytes = new Uint8Array(256); // generous; sliced to the written length below
     const view = new DataView(bytes.buffer);
@@ -351,18 +352,23 @@ describe('Reforged 1.33+ object data (format v3, modification sets)', () => {
     let o = 0;
     view.setInt32(o, 3, true); o += 4;        // version
     view.setUint32(o, 0, true); o += 4;       // original table count
-    view.setUint32(o, 1, true); o += 4;       // custom table count
+    view.setUint32(o, 2, true); o += 4;       // custom table count
+    // object 1
     ascii(o, 'hfoo'); o += 4;                 // oldId
     ascii(o, 'h300'); o += 4;                 // newId
-    view.setUint32(o, 2, true); o += 4;       // set count
-    view.setInt32(o, 0, true); o += 4;        // set 0 flag
-    view.setUint32(o, 1, true); o += 4;       // set 0 mod count
+    view.setUint32(o, 0, true); o += 4;       // v3 int list: EMPTY
+    view.setUint32(o, 1, true); o += 4;       // mod count
     ascii(o, 'uhpm'); o += 4;                 // mod id
     view.setInt32(o, 0, true); o += 4;        // variable type int
     view.setInt32(o, 777, true); o += 4;      // value
     view.setInt32(o, 0, true); o += 4;        // end token
-    view.setInt32(o, 7, true); o += 4;        // set 1 flag
-    view.setUint32(o, 1, true); o += 4;       // set 1 mod count
+    // object 2
+    ascii(o, 'hkni'); o += 4;                 // oldId
+    ascii(o, 'h301'); o += 4;                 // newId
+    view.setUint32(o, 2, true); o += 4;       // v3 int list: 2 entries
+    view.setInt32(o, 7, true); o += 4;
+    view.setInt32(o, 9, true); o += 4;
+    view.setUint32(o, 1, true); o += 4;       // mod count
     ascii(o, 'unam'); o += 4;                 // mod id
     view.setInt32(o, 3, true); o += 4;        // variable type string
     ascii(o, str); o += str.length + 1;       // null-terminated value
@@ -372,34 +378,32 @@ describe('Reforged 1.33+ object data (format v3, modification sets)', () => {
     const file = new ObjectDataFile(false);
     file.load(data);
     expect(file.version).toBe(3);
-    const obj = file.customTable.objects[0];
-    expect(obj.oldId).toBe('hfoo');
-    expect(obj.newId).toBe('h300');
-    expect(obj.sets).toHaveLength(2);
-    expect(obj.sets[0].modifications[0].value).toBe(777);
-    expect(obj.sets[1].flag).toBe(7);
-    expect(obj.sets[1].modifications[0].value).toBe('Hi');
+    expect(file.customTable.objects).toHaveLength(2);
+    const [first, second] = file.customTable.objects;
+    expect(first.oldId).toBe('hfoo');
+    expect(first.newId).toBe('h300');
+    expect(first.unk).toEqual([]);
+    expect(first.modifications[0].value).toBe(777);
+    expect(second.newId).toBe('h301');
+    expect(second.unk).toEqual([7, 9]);
+    expect(second.modifications[0].value).toBe('Hi');
     // And it must roundtrip byte-exactly.
     expect(Buffer.compare(Buffer.from(file.save()), Buffer.from(data))).toBe(0);
   });
 
-  it('ports from a v3 map, preserving sets, and emits a v3 drop', () => {
-    // Build a v3 source map with our serializer (gate verifies the roundtrip).
+  it('ports from a v3 map (empty int lists, the campaign regression) and emits a v3 drop', () => {
     const w3u = new ObjectDataFile(false);
     w3u.version = 3;
     const unit = makeObject('hfoo', 'h300', [
       { id: 'unam', type: 3, value: 'Sets Unit' },
       { id: 'umdl', type: 3, value: 'war3mapImported\\Knight2.mdl' }, // .mdl ref, .mdx file
     ]);
-    const extraSet = new ModificationSet();
-    extraSet.flag = 1;
-    const extraMod = new Modification();
-    extraMod.id = 'uhpm';
-    extraMod.variableType = 0;
-    extraMod.value = 1234;
-    extraSet.modifications.push(extraMod);
-    unit.sets.push(extraSet);
-    w3u.customTable.objects.push(unit);
+    // Real 1.33+ campaign files have an EMPTY v3 int list — the exact case
+    // that previously drifted the parser into "unknown variable type" errors.
+    expect(unit.unk).toEqual([]);
+    const second = makeObject('hkni', 'h301', [{ id: 'unam', type: 3, value: 'After Empty' }]);
+    second.unk = [0];
+    w3u.customTable.objects.push(unit, second);
 
     const archive = new MpqArchive();
     archive.resizeHashtable(8);
@@ -408,22 +412,22 @@ describe('Reforged 1.33+ object data (format v3, modification sets)', () => {
     const v3Path = join(dir, 'v3source.w3x');
     writeFileSync(v3Path, archive.save()!);
 
-    // The gate accepts it.
+    // The gate accepts it byte-exactly.
     const data = new MapData(v3Path);
     expect(data.categories.get('units')!.file.version).toBe(3);
     expect(data.categories.get('units')!.roundtrip.cosmetic).toBe(false);
 
     const result = port({ sourcePath: v3Path, targetPath, outDir: join(dir, 'drop-v3'), all: true });
-    expect(result.objects).toHaveLength(1);
+    expect(result.objects).toHaveLength(2);
 
     const { version, files } = loadW3o(readFileSync(result.w3oPath));
     expect(version).toBe(1);
     const units = files.units!;
     expect(units.version).toBe(3);
-    const ported = units.customTable.objects[0];
-    expect(ported.sets).toHaveLength(2); // set structure preserved
-    expect(ported.sets[1].flag).toBe(1);
-    expect(ported.sets[1].modifications[0].value).toBe(1234);
+    const ported = units.customTable.objects.find((obj) => obj.oldId === 'hfoo')!;
+    expect(ported.unk).toEqual([]);
+    const portedSecond = units.customTable.objects.find((obj) => obj.oldId === 'hkni')!;
+    expect(portedSecond.unk).toEqual([0]); // preserved verbatim
 
     // The .mdl reference resolved to the actual .mdx and was rewritten.
     const umdl = ported.modifications.find((m) => m.id === 'umdl')!;
