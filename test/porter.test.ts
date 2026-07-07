@@ -8,6 +8,8 @@ import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
 import { port } from '../src/porter';
 import { makeModel, makeObject, writeSourceMap, writeTargetMap } from './fixtures';
+import { FolderData } from '../src/source';
+import { prettifyName, suggestIcon, suggestName, suggestObjectFromModel } from '../src/folderobjects';
 
 let dir: string;
 let sourcePath: string;
@@ -457,5 +459,94 @@ describe('cross-parser validation', () => {
         ourFirst.modifications.map((m) => [m.id, m.value]),
       );
     }
+  });
+});
+
+describe('lone model files and auto-classification', () => {
+  it('indexes only the top directory (asset types) in non-recursive mode', () => {
+    const dir2 = join(dir, 'LooseModels');
+    mkdirSync(join(dir2, 'sub'), { recursive: true });
+    writeFileSync(join(dir2, 'Hero.mdx'), makeModel('Hero', ['hero.blp']));
+    writeFileSync(join(dir2, 'hero.blp'), 'loose-texture');
+    writeFileSync(join(dir2, 'unrelated.zip'), 'not-an-asset');
+    writeFileSync(join(dir2, 'sub', 'nested.mdx'), makeModel('Nested', []));
+
+    const flat = new FolderData(dir2, { recursive: false });
+    expect(flat.files.sort()).toEqual(['Hero.mdx', 'hero.blp']);
+    expect(flat.hasFile('hero.blp')).toBe(true);
+
+    const deep = new FolderData(dir2);
+    expect(deep.files.length).toBe(4);
+
+    // Porting from the non-recursive source works end to end.
+    const result = port({
+      sources: [
+        {
+          kind: 'folder',
+          path: dir2,
+          recursive: false,
+          objects: [{ category: 'units', name: 'Loose Hero', modelPath: 'Hero.mdx' }],
+        },
+      ],
+      targetPath,
+      outDir: join(dir, 'drop-loose'),
+    });
+    expect(result.objects).toHaveLength(1);
+    expect(existsSync(join(result.outDir, 'war3mapImported/Hero.mdx'))).toBe(true);
+    expect(existsSync(join(result.outDir, 'war3mapImported/hero.blp'))).toBe(true);
+  });
+
+  it('classifies models by their animation sequences', () => {
+    const withSeqs = (names: string[]): Uint8Array => makeModel('T', [], names);
+
+    expect(suggestObjectFromModel(withSeqs(['Stand', 'Walk', 'Attack - 1', 'Death'])).label).toBe('Melee unit');
+    expect(suggestObjectFromModel(withSeqs(['Birth', 'Stand', 'Stand Work', 'Death'])).label).toBe('Building');
+    expect(suggestObjectFromModel(withSeqs(['Stand', 'Death'])).label).toBe('Destructible');
+    expect(suggestObjectFromModel(withSeqs(['Stand', 'Stand Hit'])).label).toBe('Doodad');
+
+    expect(suggestIcon(['textures\\skin.blp', 'BTNHero.blp'])).toBe('BTNHero.blp');
+    expect(suggestIcon(['a.tga'])).toBe('a.tga');
+  });
+});
+
+describe('auto-naming', () => {
+  it('prettifies model and file names', () => {
+    expect(prettifyName('HeroVarokSaurfangGrey.mdl')).toBe('Hero Varok Saurfang Grey');
+    expect(prettifyName('dwarf_rifleman_v2')).toBe('Dwarf Rifleman');
+    expect(prettifyName('BTN-crystal.golem')).toBe('BTN Crystal Golem');
+  });
+
+  it('prefers the internal model name over the file stem', () => {
+    expect(suggestName('VarokSaurfang', 'model123.mdx')).toBe('Varok Saurfang');
+    expect(suggestName(undefined, 'FrostWyrm.mdx')).toBe('Frost Wyrm');
+    expect(suggestName('', 'a.mdx')).toBe('A');
+  });
+});
+
+describe('flying/ranged refinement', () => {
+  const walker = ['Stand', 'Walk', 'Attack', 'Death'];
+
+  it('detects flying units by name keywords', () => {
+    const s = suggestObjectFromModel(makeModel('FrostWyrm', [], walker), 'FrostWyrm.mdx');
+    expect(s.label).toBe('Flying unit');
+    expect(s.baseId).toBe('hgry');
+  });
+
+  it('detects flying units by geometry floating above the ground', () => {
+    const bytes = makeModel('Mystery', [], walker, 60);
+    const s = suggestObjectFromModel(bytes, 'Mystery.mdx');
+    expect(s.label).toBe('Flying unit');
+  });
+
+  it('detects ranged units by name keywords', () => {
+    const s = suggestObjectFromModel(makeModel('DwarfRifleman', [], walker), 'DwarfRifleman.mdx');
+    expect(s.label).toBe('Ranged unit');
+    expect(s.baseId).toBe('hrif');
+  });
+
+  it('defaults to melee for plain walkers', () => {
+    const s = suggestObjectFromModel(makeModel('Swordsman', [], walker), 'Swordsman.mdx');
+    expect(s.label).toBe('Melee unit');
+    expect(s.baseId).toBe('hfoo');
   });
 });

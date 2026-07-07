@@ -43,6 +43,15 @@ interface FolderInfo {
   defaults: Record<string, { baseId: string; idPrefix: string }>;
 }
 
+interface ObjectSuggestion {
+  category: 'units' | 'items' | 'doodads' | 'destructables';
+  baseId: string;
+  label: string;
+  reason: string;
+  iconPath: string;
+  name: string;
+}
+
 interface PortedObject {
   source: string;
   category: string;
@@ -68,14 +77,16 @@ type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 interface PorterBridge {
   pickMap(title: string): Promise<string | null>;
   pickDir(title: string): Promise<string | null>;
+  pickModel(title: string): Promise<string | null>;
   inspectMap(path: string): Promise<IpcResult<InspectData>>;
-  inspectFolder(path: string): Promise<IpcResult<FolderInfo>>;
+  inspectFolder(path: string, recursive?: boolean): Promise<IpcResult<FolderInfo>>;
+  suggestObject(folderPath: string, recursive: boolean, modelPath: string, icons: string[]): Promise<IpcResult<ObjectSuggestion>>;
   runPort(options: unknown): Promise<IpcResult<PortData>>;
   openPath(path: string): Promise<void>;
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
   getPathForFile(file: File): string;
-  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'project' | 'unknown'; path: string }>;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'model' | 'project' | 'unknown'; path: string }>;
   saveProject(json: string): Promise<string | null>;
   loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
   stockModelPath(category: string, baseId: string): Promise<string | null>;
@@ -105,17 +116,24 @@ interface MapSourceState {
   /** Objects deleted from the list entirely (still in the map, just hidden). */
   removed: Set<string>;
   filter: string;
+  /** When true, hide objects that have no custom model (use a stock game model). */
+  modelsOnly: boolean;
 }
 
 interface FolderSourceState {
   kind: 'folder';
   path: string;
+  recursive: boolean;
   info: FolderInfo;
   category: 'units' | 'items' | 'doodads' | 'destructables';
   objectName: string;
   baseId: string;
   modelPath: string;
   iconPath: string;
+  /** What the model-based auto-detection concluded, for display. */
+  suggestion?: string;
+  /** True once the user typed a name themselves — suggestions stop touching it. */
+  nameTouched?: boolean;
 }
 
 type SourceState = MapSourceState | FolderSourceState;
@@ -198,8 +216,13 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
   const { data } = source;
   const filter = source.filter.toLowerCase();
   const groups = new Map<string, InspectedObject[]>();
+  let hiddenByModelFilter = 0;
   for (const obj of data.objects) {
     if (source.removed.has(obj.id)) {
+      continue;
+    }
+    if (source.modelsOnly && !obj.modelPath) {
+      hiddenByModelFilter++;
       continue;
     }
     if (
@@ -225,6 +248,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
       <button class="small" data-all="${idx}">Select all</button>
       <button class="small" data-none="${idx}">Select none</button>
       <input type="search" data-filter="${idx}" placeholder="Filter…" value="${escapeHtml(source.filter)}" />
+      <button class="small${source.modelsOnly ? ' toggle-on' : ''}" data-models-only="${idx}" title="Show only objects that have a custom model (hide ones using stock game models)">${source.modelsOnly ? '✓ ' : ''}Custom models only</button>
       ${source.removed.size > 0 ? `<button class="small" data-restore="${idx}">Restore ${source.removed.size} removed</button>` : ''}
     </div>
     <div class="objects">`;
@@ -246,6 +270,9 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
     }
   }
   html += '</div>';
+  if (source.modelsOnly && hiddenByModelFilter > 0) {
+    html += `<div class="hint">Hiding ${hiddenByModelFilter} object(s) with no custom model.</div>`;
+  }
   for (const warning of data.warnings) {
     html += `<div class="status warn">⚠ ${escapeHtml(warning)}</div>`;
   }
@@ -287,14 +314,95 @@ function renderFolderSource(block: HTMLElement, source: FolderSourceState, idx: 
     </div>
     <div class="row" style="margin-top: 8px;">
       <button class="small" data-preview-folder="${idx}">Preview model</button>
-      <span class="hint">"Based on" is the standard object whose other settings the new object inherits.</span>
+      <span class="hint">${source.suggestion ? escapeHtml(source.suggestion) + ' ' : ''}"Based on" is the standard object whose other settings the new object inherits.</span>
     </div>`;
+}
+
+/**
+ * All custom objects reachable from `id` through reference fields (abilities,
+ * their buffs, trained units, upgrades, items, ...), including `id` itself.
+ */
+function dependencyClosure(source: MapSourceState, id: string): Set<string> {
+  const byId = new Map(source.data.objects.map((o) => [o.id, o]));
+  const closure = new Set<string>();
+  const queue = [id];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (closure.has(current)) {
+      continue;
+    }
+    closure.add(current);
+    const obj = byId.get(current);
+    if (!obj) {
+      continue;
+    }
+    for (const ref of obj.refs) {
+      for (const value of ref.values) {
+        if (value.custom && !closure.has(value.id)) {
+          queue.push(value.id);
+        }
+      }
+    }
+  }
+  return closure;
+}
+
+/** Shift-click on a checkbox: tick/untick the object AND its whole dependency chain. */
+function applyClosureSelection(idx: number, id: string, select: boolean): void {
+  const source = state.sources[idx];
+  if (!source || source.kind !== 'map') {
+    return;
+  }
+  const closure = dependencyClosure(source, id);
+  for (const depId of closure) {
+    if (select) {
+      if (!source.removed.has(depId)) {
+        source.selected.add(depId);
+      }
+    } else {
+      source.selected.delete(depId);
+    }
+  }
+  renderSources();
+  const others = closure.size - 1;
+  $('port-hint').textContent = `${select ? 'Selected' : 'Deselected'} ${id}${others > 0 ? ` and ${others} object(s) it references` : ''}.`;
+}
+
+/** Show a folder source's model + icon in the right-hand preview panel. */
+function previewFolder(idx: number): void {
+  const source = state.sources[idx];
+  if (!source || source.kind !== 'folder') {
+    return;
+  }
+  state.previewing = { sourceIdx: idx, key: 'folder' };
+  const ref = { kind: 'folder' as const, path: source.path, recursive: source.recursive };
+  void preview.show(ref, source.modelPath, source.objectName || source.info.name);
+  void showDetails(ref, {
+    name: source.objectName || source.info.name,
+    baseId: source.baseId,
+    category: source.category,
+    modelPath: source.modelPath,
+    iconPath: source.iconPath || undefined,
+  });
 }
 
 // --- Event delegation --------------------------------------------------------
 
 $('sources').addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
+  // Shift-click a checkbox: select/deselect its whole dependency chain.
+  // (click fires after the checkbox state flips, so `checked` is the NEW state)
+  if (e.shiftKey && target instanceof HTMLInputElement && target.dataset.check !== undefined) {
+    applyClosureSelection(Number(target.dataset.check), target.dataset.id!, target.checked);
+    return;
+  }
+  const modelsOnly = target.dataset.modelsOnly;
+  if (modelsOnly !== undefined) {
+    const source = state.sources[Number(modelsOnly)] as MapSourceState;
+    source.modelsOnly = !source.modelsOnly;
+    renderSources();
+    return;
+  }
   const remove = target.dataset.remove;
   if (remove !== undefined) {
     state.sources.splice(Number(remove), 1);
@@ -338,20 +446,9 @@ $('sources').addEventListener('click', (e) => {
     renderSources();
     return;
   }
-  const previewFolder = target.dataset.previewFolder;
-  if (previewFolder !== undefined) {
-    const idx = Number(previewFolder);
-    const source = state.sources[idx] as FolderSourceState;
-    state.previewing = { sourceIdx: idx, key: 'folder' };
-    const ref = { kind: 'folder' as const, path: source.path };
-    void preview.show(ref, source.modelPath, source.objectName || source.info.name);
-    void showDetails(ref, {
-      name: source.objectName || source.info.name,
-      baseId: source.baseId,
-      category: source.category,
-      modelPath: source.modelPath,
-      iconPath: source.iconPath || undefined,
-    });
+  const previewFolderBtn = target.dataset.previewFolder;
+  if (previewFolderBtn !== undefined) {
+    previewFolder(Number(previewFolderBtn));
     return;
   }
   const row = target.closest<HTMLElement>('.obj-row');
@@ -395,24 +492,34 @@ $('sources').addEventListener('change', (e) => {
     updatePortButton();
     return;
   }
-  for (const [attr, apply] of [
-    ['fCategory', (s: FolderSourceState, v: string) => {
-      s.category = v as FolderSourceState['category'];
-      s.baseId = s.info.defaults[s.category].baseId;
-    }],
-    ['fName', (s: FolderSourceState, v: string) => (s.objectName = v)],
-    ['fModel', (s: FolderSourceState, v: string) => (s.modelPath = v)],
-    ['fIcon', (s: FolderSourceState, v: string) => (s.iconPath = v)],
-    ['fBase', (s: FolderSourceState, v: string) => (s.baseId = v)],
-  ] as const) {
-    const idx = target.dataset[attr];
-    if (idx !== undefined) {
-      apply(state.sources[Number(idx)] as FolderSourceState, target.value);
-      if (attr === 'fCategory') {
-        renderSources();
-      }
-      return;
-    }
+  // Folder object form: model/icon changes update the preview immediately.
+  if (target.dataset.fCategory !== undefined) {
+    const idx = Number(target.dataset.fCategory);
+    const s = state.sources[idx] as FolderSourceState;
+    s.category = target.value as FolderSourceState['category'];
+    s.baseId = s.info.defaults[s.category].baseId;
+    renderSources();
+    previewFolder(idx);
+    return;
+  }
+  if (target.dataset.fModel !== undefined) {
+    const idx = Number(target.dataset.fModel);
+    const s = state.sources[idx] as FolderSourceState;
+    s.modelPath = target.value;
+    previewFolder(idx); // update the 3D viewer right away
+    void applySuggestion(s).then(() => previewFolder(idx));
+    return;
+  }
+  if (target.dataset.fIcon !== undefined) {
+    const idx = Number(target.dataset.fIcon);
+    const s = state.sources[idx] as FolderSourceState;
+    s.iconPath = target.value;
+    previewFolder(idx); // refresh the icon shown below the model
+    return;
+  }
+  if (target.dataset.fBase !== undefined) {
+    (state.sources[Number(target.dataset.fBase)] as FolderSourceState).baseId = target.value;
+    return;
   }
 });
 
@@ -432,7 +539,9 @@ $('sources').addEventListener('input', (e) => {
   }
   const nameIdx = target.dataset.fName;
   if (nameIdx !== undefined) {
-    (state.sources[Number(nameIdx)] as FolderSourceState).objectName = target.value;
+    const src = state.sources[Number(nameIdx)] as FolderSourceState;
+    src.objectName = target.value;
+    src.nameTouched = true;
   }
   const baseIdx = target.dataset.fBase;
   if (baseIdx !== undefined) {
@@ -463,8 +572,18 @@ async function addMapByPath(path: string): Promise<void> {
   for (const obj of result.data.objects) {
     selected.add(obj.id); // everything selected by default
   }
-  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '' });
+  state.sources.push({ kind: 'map', path, data: result.data, selected, removed: new Set(), filter: '', modelsOnly: false });
   renderSources();
+}
+
+async function addModelSource(): Promise<void> {
+  const path = await window.porter.pickModel('Choose a model file (.mdx / .mdl)');
+  if (!path) {
+    return;
+  }
+  const norm = path.replace(/\\/g, '/');
+  const slash = norm.lastIndexOf('/');
+  await addFolderByPath(path.slice(0, slash), false, norm.slice(slash + 1));
 }
 
 async function addFolderSource(): Promise<void> {
@@ -474,11 +593,11 @@ async function addFolderSource(): Promise<void> {
   }
 }
 
-async function addFolderByPath(path: string): Promise<void> {
-  if (state.sources.some((s) => s.kind === 'folder' && s.path === path)) {
+async function addFolderByPath(path: string, recursive = true, preferredModel?: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'folder' && s.path === path && s.recursive === recursive)) {
     return; // already added
   }
-  const result = await window.porter.inspectFolder(path);
+  const result = await window.porter.inspectFolder(path, recursive);
   if (!result.ok) {
     alert(result.error);
     return;
@@ -488,16 +607,44 @@ async function addFolderByPath(path: string): Promise<void> {
     return;
   }
   const info = result.data;
-  state.sources.push({
+  const modelPath =
+    (preferredModel && info.models.find((m) => m.toLowerCase() === preferredModel.toLowerCase())) ??
+    info.models.find((m) => !/_portrait\.(mdx|mdl)$/i.test(m)) ??
+    info.models[0];
+  const source: FolderSourceState = {
     kind: 'folder',
     path,
+    recursive,
     info,
     category: 'units',
-    objectName: info.name,
+    objectName: preferredModel ? preferredModel.replace(/\.(mdx|mdl)$/i, '') : info.name,
     baseId: info.defaults['units'].baseId,
-    modelPath: info.models.find((m) => !/_portrait\.mdx$/i.test(m)) ?? info.models[0],
+    modelPath,
     iconPath: '',
-  });
+  };
+  const idx = state.sources.length;
+  state.sources.push(source);
+  renderSources();
+  await applySuggestion(source);
+  // Auto-show the new object's model and icon without a manual click.
+  previewFolder(idx);
+}
+
+/** Ask the model what it wants to be, and prefill the form accordingly. */
+async function applySuggestion(source: FolderSourceState): Promise<void> {
+  const result = await window.porter.suggestObject(source.path, source.recursive, source.modelPath, source.info.icons);
+  if (!result.ok) {
+    return; // suggestion is best-effort; the form defaults stand
+  }
+  source.category = result.data.category;
+  source.baseId = result.data.baseId;
+  if (!source.iconPath && result.data.iconPath) {
+    source.iconPath = result.data.iconPath;
+  }
+  if (!source.nameTouched && result.data.name) {
+    source.objectName = result.data.name;
+  }
+  source.suggestion = `Detected: ${result.data.label} (${result.data.reason}).`;
   renderSources();
 }
 
@@ -552,6 +699,7 @@ function buildSourceSpecs(): { specs: unknown[]; error?: string } {
       specs.push({
         kind: 'folder',
         path: source.path,
+        recursive: source.recursive,
         objects: [
           {
             category: source.category,
@@ -728,6 +876,7 @@ async function showDetails(
 interface ProjectSource {
   kind: 'map' | 'folder';
   path: string;
+  recursive?: boolean;
   selected?: string[];
   removed?: string[];
   category?: FolderSourceState['category'];
@@ -758,6 +907,7 @@ function serializeProject(): ProjectFile {
       return {
         kind: 'folder',
         path: source.path,
+        recursive: source.recursive,
         category: source.category,
         objectName: source.objectName,
         baseId: source.baseId,
@@ -831,7 +981,7 @@ async function loadList(knownPath?: string): Promise<void> {
         }
       }
     } else {
-      await addFolderByPath(saved.path);
+      await addFolderByPath(saved.path, saved.recursive ?? true);
       const added = state.sources[before];
       if (!added || added.kind !== 'folder') {
         problems.push(`${saved.path}: folder could not be reopened.`);
@@ -915,10 +1065,14 @@ async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
       }
     } else if (classified.kind === 'folder' && !asTarget) {
       await addFolderByPath(path);
+    } else if (classified.kind === 'model' && !asTarget) {
+      const norm = path.replace(/\\/g, '/');
+      const slash = norm.lastIndexOf('/');
+      await addFolderByPath(path.slice(0, slash), false, norm.slice(slash + 1));
     } else if (classified.kind === 'project') {
       await loadList(path);
     } else if (classified.kind === 'unknown') {
-      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), folder, or .wc3port list — ignored.`);
+      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), model (.mdx/.mdl), folder, or .wc3port list — ignored.`);
     }
   }
 }
@@ -934,6 +1088,7 @@ document.addEventListener('drop', (e) => {
 });
 
 $('btn-add-map').addEventListener('click', () => void addMapSource());
+$('btn-add-model').addEventListener('click', () => void addModelSource());
 $('btn-save-list').addEventListener('click', () => void saveList());
 $('btn-load-list').addEventListener('click', () => void loadList());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());

@@ -10,7 +10,7 @@ import { PorterError } from '../src/formats';
 import { inspect } from '../src/inspect';
 import { PortOptions, port } from '../src/porter';
 import { FolderData } from '../src/source';
-import { folderObjectDefaults } from '../src/folderobjects';
+import { folderObjectDefaults, suggestIcon, suggestName, suggestObjectFromModel } from '../src/folderobjects';
 import { MappedData } from 'mdx-m3-viewer/dist/cjs/utils/mappeddata';
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -63,11 +63,23 @@ ipcMain.handle('pick-dir', async (_event, title: string) => {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
+ipcMain.handle('pick-model', async (_event, title: string) => {
+  const result = await dialog.showOpenDialog({
+    title,
+    properties: ['openFile'],
+    filters: [
+      { name: 'Warcraft III models', extensions: ['mdx', 'mdl'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
 ipcMain.handle('inspect-map', (_event, path: string) => wrap(() => inspect(path)));
 
-ipcMain.handle('inspect-folder', (_event, path: string) =>
+ipcMain.handle('inspect-folder', (_event, path: string, recursive?: boolean) =>
   wrap(() => {
-    const folder = new FolderData(path);
+    const folder = new FolderData(path, { recursive: recursive ?? true });
     return {
       name: folder.name,
       models: folder.filesWithExtension('.mdx', '.mdl'),
@@ -84,6 +96,24 @@ ipcMain.handle('inspect-folder', (_event, path: string) =>
 
 ipcMain.handle('run-port', (_event, options: PortOptions) => wrap(() => port(options)));
 
+// Guess unit/building/doodad/destructible from a model's animations, and pick
+// a sensible icon (BTN* convention).
+ipcMain.handle('suggest-object', (_event, folderPath: string, recursive: boolean, modelPath: string, icons: string[]) =>
+  wrap(() => {
+    const folder = new FolderData(folderPath, { recursive });
+    const bytes = folder.getFileBytes(modelPath);
+    if (!bytes) {
+      throw new PorterError(`${modelPath}: not found in the folder.`);
+    }
+    const suggestion = suggestObjectFromModel(bytes, `${modelPath} ${folder.name}`);
+    return {
+      ...suggestion,
+      iconPath: suggestIcon(icons) ?? '',
+      name: suggestName(suggestion.modelName, modelPath),
+    };
+  }),
+);
+
 // Drag & drop: decide what a dropped path is.
 ipcMain.handle('classify-path', (_event, path: string) => {
   try {
@@ -93,6 +123,9 @@ ipcMain.handle('classify-path', (_event, path: string) => {
     }
     if (stats.isFile() && /\.(w3x|w3m|w3n)$/i.test(path)) {
       return { kind: 'map' as const, path };
+    }
+    if (stats.isFile() && /\.(mdx|mdl)$/i.test(path)) {
+      return { kind: 'model' as const, path };
     }
     if (stats.isFile() && /\.wc3port$/i.test(path)) {
       return { kind: 'project' as const, path };
@@ -161,11 +194,11 @@ import { MapData } from '../src/mapdata';
 const previewCache = new Map<string, MapData | FolderData>();
 const hiveCache = new Map<string, Uint8Array | null>();
 
-function previewSource(kind: 'map' | 'folder', path: string): MapData | FolderData {
-  const key = `${kind}:${path}`;
+function previewSource(kind: 'map' | 'folder', path: string, recursive: boolean): MapData | FolderData {
+  const key = `${kind}:${recursive}:${path}`;
   let source = previewCache.get(key);
   if (!source) {
-    source = kind === 'map' ? new MapData(path) : new FolderData(path);
+    source = kind === 'map' ? new MapData(path) : new FolderData(path, { recursive });
     previewCache.set(key, source);
   }
   return source;
@@ -207,11 +240,11 @@ function pathCandidates(filePath: string): string[] {
 
 ipcMain.handle(
   'preview-file',
-  async (_event, source: { kind: 'map' | 'folder'; path: string } | null, filePath: string) => {
+  async (_event, source: { kind: 'map' | 'folder'; path: string; recursive?: boolean } | null, filePath: string) => {
     const candidates = pathCandidates(filePath);
     if (source) {
       try {
-        const data = previewSource(source.kind, source.path);
+        const data = previewSource(source.kind, source.path, source.recursive ?? true);
         for (const candidate of candidates) {
           const bytes = data.getFileBytes(candidate);
           if (bytes) {
