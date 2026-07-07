@@ -47,6 +47,8 @@ export type SourceSpec =
       path: string;
       /** Objects to create from the folder's assets. */
       objects: FolderObjectSpec[];
+      /** Index subdirectories too (default true; false for lone-file drops). */
+      recursive?: boolean;
     };
 
 export interface PortOptions {
@@ -203,7 +205,7 @@ export function port(options: PortOptions): PortResult {
       }
       return { kind: 'map', key: keys[i], spec, data, index, standardMods };
     }
-    const data = new FolderData(spec.path);
+    const data = new FolderData(spec.path, { recursive: spec.recursive ?? true });
     if (spec.objects.length === 0) {
       throw new PorterError(`${data.name}: no objects specified to create from this folder.`);
     }

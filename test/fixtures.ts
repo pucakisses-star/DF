@@ -6,6 +6,7 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Texture from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/texture';
+import Sequence from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/sequence';
 import { MdlxModel, Modification, MpqArchive, ObjectDataFile, W3Object } from '../src/formats';
 
 export function makeObject(
@@ -38,7 +39,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer;
 }
 
-export function makeModel(name: string, texturePaths: string[]): Uint8Array {
+export function makeModel(name: string, texturePaths: string[], sequenceNames: string[] = []): Uint8Array {
   const model = new MdlxModel();
   model.version = 800;
   model.name = name;
@@ -46,6 +47,11 @@ export function makeModel(name: string, texturePaths: string[]): Uint8Array {
     const texture = new Texture();
     texture.path = path;
     model.textures.push(texture);
+  }
+  for (const seqName of sequenceNames) {
+    const sequence = new Sequence();
+    sequence.name = seqName;
+    model.sequences.push(sequence);
   }
   return model.saveMdx();
 }

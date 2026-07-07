@@ -43,6 +43,15 @@ interface FolderInfo {
   defaults: Record<string, { baseId: string; idPrefix: string }>;
 }
 
+interface ObjectSuggestion {
+  category: 'units' | 'items' | 'doodads' | 'destructables';
+  baseId: string;
+  label: string;
+  reason: string;
+  iconPath: string;
+  name: string;
+}
+
 interface PortedObject {
   source: string;
   category: string;
@@ -69,13 +78,14 @@ interface PorterBridge {
   pickMap(title: string): Promise<string | null>;
   pickDir(title: string): Promise<string | null>;
   inspectMap(path: string): Promise<IpcResult<InspectData>>;
-  inspectFolder(path: string): Promise<IpcResult<FolderInfo>>;
+  inspectFolder(path: string, recursive?: boolean): Promise<IpcResult<FolderInfo>>;
+  suggestObject(folderPath: string, recursive: boolean, modelPath: string, icons: string[]): Promise<IpcResult<ObjectSuggestion>>;
   runPort(options: unknown): Promise<IpcResult<PortData>>;
   openPath(path: string): Promise<void>;
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
   getPathForFile(file: File): string;
-  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'project' | 'unknown'; path: string }>;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'model' | 'project' | 'unknown'; path: string }>;
   saveProject(json: string): Promise<string | null>;
   loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
   stockModelPath(category: string, baseId: string): Promise<string | null>;
@@ -110,12 +120,17 @@ interface MapSourceState {
 interface FolderSourceState {
   kind: 'folder';
   path: string;
+  recursive: boolean;
   info: FolderInfo;
   category: 'units' | 'items' | 'doodads' | 'destructables';
   objectName: string;
   baseId: string;
   modelPath: string;
   iconPath: string;
+  /** What the model-based auto-detection concluded, for display. */
+  suggestion?: string;
+  /** True once the user typed a name themselves — suggestions stop touching it. */
+  nameTouched?: boolean;
 }
 
 type SourceState = MapSourceState | FolderSourceState;
@@ -287,7 +302,7 @@ function renderFolderSource(block: HTMLElement, source: FolderSourceState, idx: 
     </div>
     <div class="row" style="margin-top: 8px;">
       <button class="small" data-preview-folder="${idx}">Preview model</button>
-      <span class="hint">"Based on" is the standard object whose other settings the new object inherits.</span>
+      <span class="hint">${source.suggestion ? escapeHtml(source.suggestion) + ' ' : ''}"Based on" is the standard object whose other settings the new object inherits.</span>
     </div>`;
 }
 
@@ -399,7 +414,7 @@ $('sources').addEventListener('click', (e) => {
     const idx = Number(previewFolder);
     const source = state.sources[idx] as FolderSourceState;
     state.previewing = { sourceIdx: idx, key: 'folder' };
-    const ref = { kind: 'folder' as const, path: source.path };
+    const ref = { kind: 'folder' as const, path: source.path, recursive: source.recursive };
     void preview.show(ref, source.modelPath, source.objectName || source.info.name);
     void showDetails(ref, {
       name: source.objectName || source.info.name,
@@ -457,7 +472,10 @@ $('sources').addEventListener('change', (e) => {
       s.baseId = s.info.defaults[s.category].baseId;
     }],
     ['fName', (s: FolderSourceState, v: string) => (s.objectName = v)],
-    ['fModel', (s: FolderSourceState, v: string) => (s.modelPath = v)],
+    ['fModel', (s: FolderSourceState, v: string) => {
+      s.modelPath = v;
+      void applySuggestion(s);
+    }],
     ['fIcon', (s: FolderSourceState, v: string) => (s.iconPath = v)],
     ['fBase', (s: FolderSourceState, v: string) => (s.baseId = v)],
   ] as const) {
@@ -488,7 +506,9 @@ $('sources').addEventListener('input', (e) => {
   }
   const nameIdx = target.dataset.fName;
   if (nameIdx !== undefined) {
-    (state.sources[Number(nameIdx)] as FolderSourceState).objectName = target.value;
+    const src = state.sources[Number(nameIdx)] as FolderSourceState;
+    src.objectName = target.value;
+    src.nameTouched = true;
   }
   const baseIdx = target.dataset.fBase;
   if (baseIdx !== undefined) {
@@ -530,11 +550,11 @@ async function addFolderSource(): Promise<void> {
   }
 }
 
-async function addFolderByPath(path: string): Promise<void> {
-  if (state.sources.some((s) => s.kind === 'folder' && s.path === path)) {
+async function addFolderByPath(path: string, recursive = true, preferredModel?: string): Promise<void> {
+  if (state.sources.some((s) => s.kind === 'folder' && s.path === path && s.recursive === recursive)) {
     return; // already added
   }
-  const result = await window.porter.inspectFolder(path);
+  const result = await window.porter.inspectFolder(path, recursive);
   if (!result.ok) {
     alert(result.error);
     return;
@@ -544,16 +564,41 @@ async function addFolderByPath(path: string): Promise<void> {
     return;
   }
   const info = result.data;
-  state.sources.push({
+  const modelPath =
+    (preferredModel && info.models.find((m) => m.toLowerCase() === preferredModel.toLowerCase())) ??
+    info.models.find((m) => !/_portrait\.(mdx|mdl)$/i.test(m)) ??
+    info.models[0];
+  const source: FolderSourceState = {
     kind: 'folder',
     path,
+    recursive,
     info,
     category: 'units',
-    objectName: info.name,
+    objectName: preferredModel ? preferredModel.replace(/\.(mdx|mdl)$/i, '') : info.name,
     baseId: info.defaults['units'].baseId,
-    modelPath: info.models.find((m) => !/_portrait\.mdx$/i.test(m)) ?? info.models[0],
+    modelPath,
     iconPath: '',
-  });
+  };
+  state.sources.push(source);
+  renderSources();
+  await applySuggestion(source);
+}
+
+/** Ask the model what it wants to be, and prefill the form accordingly. */
+async function applySuggestion(source: FolderSourceState): Promise<void> {
+  const result = await window.porter.suggestObject(source.path, source.recursive, source.modelPath, source.info.icons);
+  if (!result.ok) {
+    return; // suggestion is best-effort; the form defaults stand
+  }
+  source.category = result.data.category;
+  source.baseId = result.data.baseId;
+  if (!source.iconPath && result.data.iconPath) {
+    source.iconPath = result.data.iconPath;
+  }
+  if (!source.nameTouched && result.data.name) {
+    source.objectName = result.data.name;
+  }
+  source.suggestion = `Detected: ${result.data.label} (${result.data.reason}).`;
   renderSources();
 }
 
@@ -608,6 +653,7 @@ function buildSourceSpecs(): { specs: unknown[]; error?: string } {
       specs.push({
         kind: 'folder',
         path: source.path,
+        recursive: source.recursive,
         objects: [
           {
             category: source.category,
@@ -784,6 +830,7 @@ async function showDetails(
 interface ProjectSource {
   kind: 'map' | 'folder';
   path: string;
+  recursive?: boolean;
   selected?: string[];
   removed?: string[];
   category?: FolderSourceState['category'];
@@ -814,6 +861,7 @@ function serializeProject(): ProjectFile {
       return {
         kind: 'folder',
         path: source.path,
+        recursive: source.recursive,
         category: source.category,
         objectName: source.objectName,
         baseId: source.baseId,
@@ -887,7 +935,7 @@ async function loadList(knownPath?: string): Promise<void> {
         }
       }
     } else {
-      await addFolderByPath(saved.path);
+      await addFolderByPath(saved.path, saved.recursive ?? true);
       const added = state.sources[before];
       if (!added || added.kind !== 'folder') {
         problems.push(`${saved.path}: folder could not be reopened.`);
@@ -971,10 +1019,14 @@ async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
       }
     } else if (classified.kind === 'folder' && !asTarget) {
       await addFolderByPath(path);
+    } else if (classified.kind === 'model' && !asTarget) {
+      const norm = path.replace(/\\/g, '/');
+      const slash = norm.lastIndexOf('/');
+      await addFolderByPath(path.slice(0, slash), false, norm.slice(slash + 1));
     } else if (classified.kind === 'project') {
       await loadList(path);
     } else if (classified.kind === 'unknown') {
-      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), folder, or .wc3port list — ignored.`);
+      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), model (.mdx/.mdl), folder, or .wc3port list — ignored.`);
     }
   }
 }
