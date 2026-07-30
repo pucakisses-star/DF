@@ -141,6 +141,8 @@ type SourceState = MapSourceState | FolderSourceState;
 const state = {
   sources: [] as SourceState[],
   targetPath: null as string | null,
+  /** User is importing into a brand-new/blank map — no target needed. */
+  blankTarget: false,
   previewing: null as { sourceIdx: number; key: string } | null,
 };
 
@@ -186,8 +188,33 @@ function updatePortButton(): void {
     return;
   }
   btn.disabled = false;
-  const target = state.targetPath ? '' : ' (no target chosen: ID collisions cannot be checked)';
+  let target = '';
+  if (!state.targetPath) {
+    target = state.blankTarget
+      ? ' (new/blank map: IDs kept as-is)'
+      : ' (no target chosen: ID collisions cannot be checked)';
+  }
   hint.textContent = `${count} object(s) selected — dependencies come along automatically.${target}`;
+}
+
+/** Reflect the blank-target checkbox: disable the picker and reword the hint. */
+function applyBlankTarget(): void {
+  state.blankTarget = $<HTMLInputElement>('opt-blank-target').checked;
+  const btn = $<HTMLButtonElement>('btn-target');
+  btn.disabled = state.blankTarget;
+  if (state.blankTarget) {
+    state.targetPath = null;
+    $('target-path').textContent = '(a fresh map — create it in the editor with File → New Map)';
+    setStatus('target-status', 'good', '✓ Importing into a new/blank map — no collision checking needed (nothing to collide with).');
+    $('target-hint').textContent =
+      'Objects keep their original rawcodes. After building the drop, make a new map in the World Editor (File → New Map) and import into it.';
+  } else {
+    $('target-path').textContent = '(the map the objects will go into)';
+    setStatus('target-status', '', '');
+    $('target-hint').textContent =
+      'Optional but recommended — it lets the porter detect and fix ID collisions with objects your map already has.';
+  }
+  updatePortButton();
 }
 
 // --- Source rendering --------------------------------------------------------
@@ -649,6 +676,9 @@ async function applySuggestion(source: FolderSourceState): Promise<void> {
 }
 
 async function chooseTarget(): Promise<void> {
+  if (state.blankTarget) {
+    return;
+  }
   const path = await window.porter.pickMap('Choose the target map or campaign');
   if (path) {
     await setTargetByPath(path);
@@ -656,6 +686,13 @@ async function chooseTarget(): Promise<void> {
 }
 
 async function setTargetByPath(path: string): Promise<void> {
+  if (state.blankTarget) {
+    state.blankTarget = false;
+    $<HTMLInputElement>('opt-blank-target').checked = false;
+    $<HTMLButtonElement>('btn-target').disabled = false;
+    $('target-hint').textContent =
+      'Optional but recommended — it lets the porter detect and fix ID collisions with objects your map already has.';
+  }
   state.targetPath = path;
   $('target-path').textContent = path;
   setStatus('target-status', '', 'Checking…');
@@ -726,8 +763,10 @@ function renderResults(data: PortData): void {
       ${remapped.length > 0 ? `<li class="remaps">${remapped.length} ID(s) renamed to avoid collisions: ${remapped.map((o) => `<code>${escapeHtml(o.sourceId)}→${escapeHtml(o.newId)}</code>`).join(', ')}</li>` : ''}
     </ul>`;
 
-  if (data.warnings.length > 0) {
-    html += `<ul class="warnings">${data.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`;
+  // When the user deliberately targets a blank map, the "no target" warning is expected noise.
+  const warnings = state.blankTarget ? data.warnings.filter((w) => !w.startsWith('No target map given')) : data.warnings;
+  if (warnings.length > 0) {
+    html += `<ul class="warnings">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`;
   }
 
   html += `
@@ -890,6 +929,7 @@ interface ProjectFile {
   version: 1;
   app: 'wc3-object-porter';
   targetPath: string | null;
+  blankTarget?: boolean;
   includeStandardMods: boolean;
   sources: ProjectSource[];
 }
@@ -899,6 +939,7 @@ function serializeProject(): ProjectFile {
     version: 1,
     app: 'wc3-object-porter',
     targetPath: state.targetPath,
+    blankTarget: state.blankTarget,
     includeStandardMods: $<HTMLInputElement>('opt-standard').checked,
     sources: state.sources.map((source): ProjectSource => {
       if (source.kind === 'map') {
@@ -1016,6 +1057,9 @@ async function loadList(knownPath?: string): Promise<void> {
   $<HTMLInputElement>('opt-standard').checked = Boolean(project.includeStandardMods);
   if (project.targetPath) {
     await setTargetByPath(project.targetPath);
+  } else if (project.blankTarget) {
+    $<HTMLInputElement>('opt-blank-target').checked = true;
+    applyBlankTarget();
   }
   renderSources();
 
@@ -1093,6 +1137,7 @@ $('btn-save-list').addEventListener('click', () => void saveList());
 $('btn-load-list').addEventListener('click', () => void loadList());
 $('btn-add-folder').addEventListener('click', () => void addFolderSource());
 $('btn-target').addEventListener('click', () => void chooseTarget());
+$('opt-blank-target').addEventListener('change', () => applyBlankTarget());
 $('btn-port').addEventListener('click', () => void runPort());
 
 export {};

@@ -71,6 +71,10 @@ Node.js):
   target at once. The results view shows what was ported, which IDs were
   renamed, and the exact World Editor steps — with buttons to open the drop
   folder and the full report.
+- Starting a fresh project? Tick **"Importing into a new / blank map"** instead
+  of choosing a target — objects keep their original rawcodes (a blank map has
+  nothing to collide with), and you make the empty map itself in the World
+  Editor with *File → New Map*.
 
 Download it from the *Build Windows executable* workflow run (repo **Actions**
 tab → latest run → `wc3-object-porter-gui-windows` artifact), or from a

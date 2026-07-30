@@ -188,12 +188,14 @@
 
       <div class="card" id="card-target">
         <h2>2 &nbsp;Target map or campaign</h2>
+        <label class="check" style="margin-bottom: 10px;"><input type="checkbox" id="opt-blank-target" />
+          I'm importing into a <b>new / blank map</b> (no existing target)</label>
         <div class="row">
           <button id="btn-target">Choose target…</button>
           <span class="path" id="target-path">(the map the objects will go <b>into</b>)</span>
         </div>
         <div class="status" id="target-status"></div>
-        <div class="hint">Optional but recommended — it lets the porter detect and fix ID collisions with objects your map already has.</div>
+        <div class="hint" id="target-hint">Optional but recommended — it lets the porter detect and fix ID collisions with objects your map already has.</div>
       </div>
 
       <div class="card" id="card-options">
