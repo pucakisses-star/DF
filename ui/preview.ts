@@ -21,6 +21,7 @@ import { vec3 } from 'gl-matrix';
 export interface PreviewSourceRef {
   kind: 'map' | 'folder';
   path: string;
+  recursive?: boolean;
 }
 
 type FileFetcher = (source: PreviewSourceRef | null, filePath: string) => Promise<Uint8Array | null>;

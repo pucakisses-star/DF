@@ -71,6 +71,10 @@ Node.js):
   target at once. The results view shows what was ported, which IDs were
   renamed, and the exact World Editor steps — with buttons to open the drop
   folder and the full report.
+- Starting a fresh project? Tick **"Importing into a new / blank map"** instead
+  of choosing a target — objects keep their original rawcodes (a blank map has
+  nothing to collide with), and you make the empty map itself in the World
+  Editor with *File → New Map*.
 
 Download it from the *Build Windows executable* workflow run (repo **Actions**
 tab → latest run → `wc3-object-porter-gui-windows` artifact), or from a
@@ -149,9 +153,12 @@ target (campaign-level object data, `war3campaign.*`).
 
 ## Limitations
 
-- Object-data format versions 1–3 are supported (classic through current
-  Reforged, including the 1.33+ "modification sets" format). Anything newer is
-  detected and refused — never misread.
+- Reads object-data format versions 1–3 (classic through current Reforged
+  1.33+). The emitted drop is always written in the widely-compatible v2
+  format, which the World Editor's *Import Object Settings* accepts on both
+  classic and Reforged — importing a v3 file has been observed to crash the
+  editor, and v2 loses no object data (v3 adds only editor bookkeeping the
+  editor regenerates). Anything newer than v3 is detected and refused.
 - Triggers/JASS are not ported; if a ported object is referenced from script in
   the source, wire it up in the target yourself (the report gives you the final
   rawcodes).

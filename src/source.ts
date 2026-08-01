@@ -17,6 +17,18 @@ export function normalizeAssetPath(path: string): string {
   return path.replace(/\//g, '\\').trim();
 }
 
+/** Extensions worth indexing when scanning a directory non-recursively. */
+const LOOSE_ASSET_EXTENSIONS = /\.(mdx|mdl|blp|dds|tga|jpg|gif|mp3|wav|flac|txt)$/i;
+
+export interface FolderDataOptions {
+  /**
+   * When false, only the root directory itself is indexed (filtered to asset
+   * file types). Used for lone model files dropped from crowded directories
+   * like Downloads, where recursing would index the world.
+   */
+  recursive?: boolean;
+}
+
 /**
  * A folder treated as an asset source. Files resolve by relative path
  * (case-insensitive, slash-agnostic), with a basename fallback — Hive models
@@ -30,10 +42,12 @@ export class FolderData implements AssetSource {
   /** lowercased basename -> absolute paths (may be ambiguous) */
   private byBase = new Map<string, string[]>();
   readonly files: string[] = [];
+  readonly recursive: boolean;
 
-  constructor(root: string) {
+  constructor(root: string, options?: FolderDataOptions) {
     this.root = root;
     this.name = basename(root);
+    this.recursive = options?.recursive ?? true;
     let stats;
     try {
       stats = statSync(root);
@@ -53,8 +67,13 @@ export class FolderData implements AssetSource {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) {
-        this.walk(abs);
+        if (this.recursive) {
+          this.walk(abs);
+        }
       } else if (entry.isFile()) {
+        if (!this.recursive && !LOOSE_ASSET_EXTENSIONS.test(entry.name)) {
+          continue;
+        }
         const rel = normalizeAssetPath(relative(this.root, abs));
         this.files.push(rel);
         this.byRelPath.set(rel.toLowerCase(), abs);
