@@ -511,14 +511,15 @@ export function port(options: PortOptions): PortResult {
 
   // --- Emit ------------------------------------------------------------------
 
-  // Any v3 (Reforged 1.33+) source forces the whole drop to v3, because a
-  // single category file cannot mix framings. The 1.33+ editor reads both.
-  const maxSourceVersion = Math.max(
-    2,
-    ...sources
-      .filter((s): s is LoadedMapSource => s.kind === 'map')
-      .flatMap((s) => [...s.data.categories.values()].map((c) => c.file.version)),
-  );
+  // Always emit format version 2. v2/v1 object framing is what the World
+  // Editor's "Import Object Settings" reliably accepts (classic AND Reforged);
+  // importing a v3 (Reforged 1.33+) file has been observed to crash the editor.
+  // v3 adds only an undocumented per-object integer list ("unk") that is
+  // editor bookkeeping — every actual object/field modification is byte-for-byte
+  // identical in v2 — so downgrading to v2 loses no object data. The importing
+  // editor regenerates its own bookkeeping when it next saves.
+  const EMIT_VERSION = 2;
+  let droppedUnk = 0;
 
   const w3oFiles: W3oFiles = {};
   for (const def of CATEGORIES) {
@@ -527,11 +528,23 @@ export function port(options: PortOptions): PortResult {
     if (custom.length === 0 && original.length === 0) {
       continue;
     }
+    for (const obj of [...custom, ...original]) {
+      if (obj.unk.length > 0) {
+        droppedUnk += obj.unk.length;
+        obj.unk = []; // not representable in v2; safe to drop (editor regenerates it)
+      }
+    }
     const file = newObjectFile(def);
-    file.version = maxSourceVersion;
+    file.version = EMIT_VERSION;
     file.originalTable.objects = original;
     file.customTable.objects = custom;
     w3oFiles[def.key] = file;
+  }
+
+  if (droppedUnk > 0) {
+    warnings.push(
+      `Emitting the drop in the widely-compatible v2 object format; ${droppedUnk} internal Reforged bookkeeping value(s) were dropped (they carry no object data and the editor regenerates them on save).`,
+    );
   }
 
   const w3oBytes = saveW3o(w3oFiles);

@@ -393,7 +393,7 @@ describe('Reforged 1.33+ object data (format v3)', () => {
     expect(Buffer.compare(Buffer.from(file.save()), Buffer.from(data))).toBe(0);
   });
 
-  it('ports from a v3 map (empty int lists, the campaign regression) and emits a v3 drop', () => {
+  it('reads a v3 map but emits a v2 drop the editor can import (dropping unk bookkeeping)', () => {
     const w3u = new ObjectDataFile(false);
     w3u.version = 3;
     const unit = makeObject('hfoo', 'h300', [
@@ -423,17 +423,22 @@ describe('Reforged 1.33+ object data (format v3)', () => {
     expect(result.objects).toHaveLength(2);
 
     const { version, files } = loadW3o(readFileSync(result.w3oPath));
-    expect(version).toBe(1);
+    expect(version).toBe(1); // container version
     const units = files.units!;
-    expect(units.version).toBe(3);
+    // Emitted as v2 — the universally-importable format — NOT v3.
+    expect(units.version).toBe(2);
     const ported = units.customTable.objects.find((obj) => obj.oldId === 'hfoo')!;
     expect(ported.unk).toEqual([]);
     const portedSecond = units.customTable.objects.find((obj) => obj.oldId === 'hkni')!;
-    expect(portedSecond.unk).toEqual([0]); // preserved verbatim
+    expect(portedSecond.unk).toEqual([]); // v3 bookkeeping dropped on downgrade
+    // ...and the user is told the harmless bookkeeping was dropped.
+    expect(result.warnings.some((w) => w.includes('v2 object format'))).toBe(true);
 
-    // The .mdl reference resolved to the actual .mdx and was rewritten.
+    // Every actual field modification survives the downgrade untouched.
     const umdl = ported.modifications.find((m) => m.id === 'umdl')!;
     expect(umdl.value).toBe('war3mapImported\\Knight2.mdx');
+    expect(ported.modifications.find((m) => m.id === 'unam')!.value).toBe('Sets Unit');
+    expect(portedSecond.modifications.find((m) => m.id === 'unam')!.value).toBe('After Empty');
     expect(existsSync(join(result.outDir, 'war3mapImported/Knight2.mdx'))).toBe(true);
   });
 });
