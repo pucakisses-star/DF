@@ -10,18 +10,20 @@
 import { parseArgs } from 'util';
 import { CATEGORIES, PorterError, categoryByKey } from './formats';
 import { MapData } from './mapdata';
+import { W3oData } from './w3odata';
 import { inspect } from './inspect';
 import { port } from './porter';
 
 const USAGE = `wc3-porter — safe Warcraft III custom object importer
 
 Commands:
-  inspect <map>   List custom objects, standard-object edits and imports in a map/campaign.
+  inspect <map>   List custom objects, standard-object edits and imports in a map/campaign/.w3o export.
   verify <map>    Run the roundtrip verification gate on all object data files.
   port            Build an import drop (.w3o + assets + report) from a source map.
 
 Port options:
-  --source, -s <map>        Source map/campaign to take objects from (repeatable)
+  --source, -s <map>        Source map/campaign/.w3o export to take objects from (repeatable;
+                            a .w3o resolves its models and icons from the folder it lives in)
   --target, -t <map>        Target map/campaign (enables collision-safe rawcode remapping)
   --out,    -o <dir>        Output directory for the drop (required)
   --ids <a,b,c>             Rawcodes to port (single source only; dependencies come along automatically)
@@ -86,6 +88,21 @@ function main(): void {
     if (!path) {
       fail('usage: wc3-porter verify <map>');
     }
+    if (/\.w3o$/i.test(path)) {
+      // W3oData runs the roundtrip gate on the whole container at load time.
+      const data = new W3oData(path);
+      console.log(`${data.name}: ${data.cosmetic ? 'OK (cosmetic re-encode)' : 'OK (byte-exact)'}`);
+      for (const cat of data.categories.values()) {
+        console.log(
+          `  ${categoryByKey(cat.def.key).label}: ${cat.file.customTable.objects.length} custom, ${cat.file.originalTable.objects.length} standard edits`,
+        );
+      }
+      for (const warning of data.warnings) {
+        console.log(`warning: ${warning}`);
+      }
+      console.log('The object export passed roundtrip verification.');
+      return;
+    }
     // MapData runs the roundtrip gate on every object file at load time.
     const data = new MapData(path);
     if (data.categories.size === 0) {
@@ -129,7 +146,12 @@ function main(): void {
 
     const ids = values.ids ? values.ids.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
     const result = port({
-      sources: sourcePaths.map((path) => ({ kind: 'map' as const, path, ids, all: values.all })),
+      sources: sourcePaths.map((path) => ({
+        kind: /\.w3o$/i.test(path) ? ('w3o' as const) : ('map' as const),
+        path,
+        ids,
+        all: values.all,
+      })),
       targetPath: values.target,
       outDir: values.out,
       includeStandardMods: values['include-standard-mods'],

@@ -4,13 +4,31 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { basename, join, relative } from 'path';
-import { PorterError } from './formats';
+import { CategoryDef, CategoryKey, ObjectFile, PorterError } from './formats';
 
 export interface AssetSource {
   /** Short human-readable name (file/folder basename). */
   readonly name: string;
   getFileBytes(path: string): Uint8Array | null;
   hasFile(path: string): boolean;
+}
+
+/**
+ * A source of custom object *definitions*: a map/campaign archive (MapData) or
+ * an Object Editor export file (W3oData). The porter's closure walk and the
+ * inspector run against this surface without caring which one it is.
+ */
+export interface ObjectDataSource extends AssetSource {
+  readonly path: string;
+  readonly isCampaign: boolean;
+  readonly warnings: string[];
+  readonly categories: ReadonlyMap<CategoryKey, { def: CategoryDef; file: ObjectFile }>;
+  /** Resolve a TRIGSTR_nnn reference to its literal string, if possible. */
+  resolveTrigStr(value: string): string | undefined;
+  /** Every custom-object rawcode defined in this source, across all categories. */
+  customIds(): Set<string>;
+  /** Number of files that travel with this source (archive imports / folder assets). */
+  importedFileCount(): number;
 }
 
 export function normalizeAssetPath(path: string): string {
