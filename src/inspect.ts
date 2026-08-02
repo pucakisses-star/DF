@@ -4,6 +4,8 @@
 import { CATEGORIES, CategoryKey } from './formats';
 import { isRawcodeList } from './ids';
 import { MapData } from './mapdata';
+import { W3oData } from './w3odata';
+import { ObjectDataSource } from './source';
 
 /** Friendly labels for well-known rawcode-list fields. */
 const REF_FIELD_LABELS: Record<string, string> = {
@@ -58,6 +60,8 @@ export interface InspectedObject {
 export interface InspectResult {
   name: string;
   isCampaign: boolean;
+  /** True when the source is an Object Editor export (.w3o), not an archive. */
+  isObjectExport: boolean;
   objects: InspectedObject[];
   standardMods: number;
   importCount: number;
@@ -65,7 +69,8 @@ export interface InspectResult {
 }
 
 export function inspect(path: string): InspectResult {
-  const source = new MapData(path);
+  const isObjectExport = /\.w3o$/i.test(path);
+  const source: ObjectDataSource = isObjectExport ? new W3oData(path) : new MapData(path);
   const objects: InspectedObject[] = [];
   let standardMods = 0;
 
@@ -144,9 +149,10 @@ export function inspect(path: string): InspectResult {
   return {
     name: source.name,
     isCampaign: source.isCampaign,
+    isObjectExport,
     objects,
     standardMods,
-    importCount: source.map.getImportNames().length,
+    importCount: source.importedFileCount(),
     warnings: source.warnings,
   };
 }

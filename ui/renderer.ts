@@ -30,6 +30,7 @@ interface InspectedObject {
 interface InspectData {
   name: string;
   isCampaign: boolean;
+  isObjectExport: boolean;
   objects: InspectedObject[];
   standardMods: number;
   importCount: number;
@@ -40,6 +41,8 @@ interface FolderInfo {
   name: string;
   models: string[];
   icons: string[];
+  /** Object Editor exports (.w3o) found inside the folder. */
+  objectData: string[];
   defaults: Record<string, { baseId: string; idPrefix: string }>;
 }
 
@@ -86,7 +89,7 @@ interface PorterBridge {
   showInFolder(path: string): Promise<void>;
   previewFile(source: { kind: string; path: string } | null, filePath: string): Promise<Uint8Array | null>;
   getPathForFile(file: File): string;
-  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'model' | 'project' | 'unknown'; path: string }>;
+  classifyPath(path: string): Promise<{ kind: 'map' | 'folder' | 'model' | 'w3o' | 'project' | 'unknown'; path: string }>;
   saveProject(json: string): Promise<string | null>;
   loadProject(knownPath?: string): Promise<{ path: string; json?: string; error?: string } | null>;
   stockModelPath(category: string, baseId: string): Promise<string | null>;
@@ -239,6 +242,19 @@ function removeButton(idx: number): string {
   return `<button class="small" data-remove="${idx}">Remove</button>`;
 }
 
+/**
+ * Where preview files for a map-list source come from: the archive itself, or
+ * — for a .w3o export — the folder the export lives in.
+ */
+function mapPreviewRef(source: MapSourceState): { kind: 'map' | 'folder'; path: string; recursive?: boolean } {
+  if (/\.w3o$/i.test(source.path)) {
+    const norm = source.path.replace(/\\/g, '/');
+    const slash = norm.lastIndexOf('/');
+    return { kind: 'folder', path: slash > 0 ? source.path.slice(0, slash) : source.path, recursive: true };
+  }
+  return { kind: 'map', path: source.path };
+}
+
 function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number): void {
   const { data } = source;
   const filter = source.filter.toLowerCase();
@@ -268,7 +284,7 @@ function renderMapSource(block: HTMLElement, source: MapSourceState, idx: number
   let html = `
     <div class="src-head">
       <b>${escapeHtml(data.name)}</b>
-      <span class="path">${data.objects.length} custom object(s)${data.isCampaign ? ' · campaign' : ''}${data.standardMods > 0 ? ` · ${data.standardMods} standard edit(s)` : ''}</span>
+      <span class="path">${data.objects.length} custom object(s)${data.isCampaign ? ' · campaign' : ''}${data.isObjectExport ? ' · object data export' : ''}${data.standardMods > 0 ? ` · ${data.standardMods} standard edit(s)` : ''}</span>
       ${removeButton(idx)}
     </div>
     <div class="toolbar">
@@ -490,7 +506,7 @@ $('sources').addEventListener('click', (e) => {
         el.classList.remove('previewing');
       }
       row.classList.add('previewing');
-      const ref = { kind: 'map' as const, path: source.path };
+      const ref = mapPreviewRef(source);
       void previewObject(ref, obj);
       void showDetails(ref, {
         name: obj.name ?? obj.id,
@@ -579,7 +595,7 @@ $('sources').addEventListener('input', (e) => {
 // --- Adding sources ----------------------------------------------------------
 
 async function addMapSource(): Promise<void> {
-  const path = await window.porter.pickMap('Choose a source map or campaign');
+  const path = await window.porter.pickMap('Choose a source map, campaign, or object export (.w3o)');
   if (path) {
     await addMapByPath(path);
   }
@@ -620,13 +636,30 @@ async function addFolderSource(): Promise<void> {
   }
 }
 
-async function addFolderByPath(path: string, recursive = true, preferredModel?: string): Promise<void> {
+async function addFolderByPath(
+  path: string,
+  recursive = true,
+  preferredModel?: string,
+  /** Skip the contained-.w3o shortcut (used when restoring a saved folder source). */
+  ignoreObjectData = false,
+): Promise<void> {
   if (state.sources.some((s) => s.kind === 'folder' && s.path === path && s.recursive === recursive)) {
     return; // already added
   }
   const result = await window.porter.inspectFolder(path, recursive);
   if (!result.ok) {
     alert(result.error);
+    return;
+  }
+  // A folder that ships its own Object Editor export (.w3o) already describes
+  // its objects: load those instead of the create-an-object-from-model form.
+  // The export's models/icons resolve from this same folder automatically.
+  const objectData = result.data.objectData ?? [];
+  if (!preferredModel && !ignoreObjectData && objectData.length > 0) {
+    const norm = path.replace(/\\/g, '/').replace(/\/+$/, '');
+    for (const rel of objectData) {
+      await addMapByPath(`${norm}/${rel.replace(/\\/g, '/')}`);
+    }
     return;
   }
   if (result.data.models.length === 0) {
@@ -686,6 +719,12 @@ async function chooseTarget(): Promise<void> {
 }
 
 async function setTargetByPath(path: string): Promise<void> {
+  if (/\.w3o$/i.test(path)) {
+    alert(
+      'An object-data export (.w3o) can be a source, not a target.\n\nThe target is the map or campaign the World Editor will import into — add the .w3o to the Sources list instead.',
+    );
+    return;
+  }
   if (state.blankTarget) {
     state.blankTarget = false;
     $<HTMLInputElement>('opt-blank-target').checked = false;
@@ -721,7 +760,7 @@ function buildSourceSpecs(): { specs: unknown[]; error?: string } {
       }
       const everything = source.selected.size === source.data.objects.length;
       specs.push({
-        kind: 'map',
+        kind: /\.w3o$/i.test(source.path) ? 'w3o' : 'map',
         path: source.path,
         all: everything,
         ids: everything ? undefined : [...source.selected],
@@ -1022,7 +1061,7 @@ async function loadList(knownPath?: string): Promise<void> {
         }
       }
     } else {
-      await addFolderByPath(saved.path, saved.recursive ?? true);
+      await addFolderByPath(saved.path, saved.recursive ?? true, undefined, true);
       const added = state.sources[before];
       if (!added || added.kind !== 'folder') {
         problems.push(`${saved.path}: folder could not be reopened.`);
@@ -1113,10 +1152,18 @@ async function handleDrop(files: FileList, asTarget: boolean): Promise<void> {
       const norm = path.replace(/\\/g, '/');
       const slash = norm.lastIndexOf('/');
       await addFolderByPath(path.slice(0, slash), false, norm.slice(slash + 1));
+    } else if (classified.kind === 'w3o') {
+      if (asTarget) {
+        alert('An object-data export (.w3o) can be a source, not a target — drop it on the Sources list instead.');
+      } else {
+        await addMapByPath(path);
+      }
     } else if (classified.kind === 'project') {
       await loadList(path);
     } else if (classified.kind === 'unknown') {
-      alert(`${path}\n\nNot a map (.w3x/.w3m/.w3n), model (.mdx/.mdl), folder, or .wc3port list — ignored.`);
+      alert(
+        `${path}\n\nNot a map (.w3x/.w3m/.w3n), object export (.w3o), model (.mdx/.mdl), folder, or .wc3port list — ignored.`,
+      );
     }
   }
 }

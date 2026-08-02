@@ -27,7 +27,8 @@ import {
 import { loadW3o, saveW3o, W3oFiles } from './w3o';
 import { IdAllocator, isRawcode, isRawcodeList } from './ids';
 import { MapData } from './mapdata';
-import { FolderData } from './source';
+import { W3oData } from './w3odata';
+import { FolderData, ObjectDataSource } from './source';
 import { FolderObjectSpec, folderObjectDefaults, synthesizeObject } from './folderobjects';
 import { Manifest, loadManifest, saveManifest } from './manifest';
 import { AssetCollector, ImportPathRegistry, looksLikeAssetPath } from './assets';
@@ -40,6 +41,13 @@ export type SourceSpec =
       /** Rawcodes to port from this map. Ignored when `all` is set. */
       ids?: string[];
       /** Port every custom object in this map. */
+      all?: boolean;
+    }
+  | {
+      /** An Object Editor export (.w3o); assets resolve from its folder. */
+      kind: 'w3o';
+      path: string;
+      ids?: string[];
       all?: boolean;
     }
   | {
@@ -156,6 +164,11 @@ export function port(options: PortOptions): PortResult {
 
   let target: MapData | null = null;
   if (options.targetPath) {
+    if (/\.w3o$/i.test(options.targetPath)) {
+      throw new PorterError(
+        'A .w3o object export can be a source, not a target: the target is the map or campaign the World Editor will import into.',
+      );
+    }
     target = new MapData(options.targetPath);
     warnings.push(...target.warnings);
   } else {
@@ -173,11 +186,13 @@ export function port(options: PortOptions): PortResult {
 
   // --- Load sources ----------------------------------------------------------
 
+  // Maps and .w3o exports load differently but walk identically; both land
+  // here ('map' is the internal kind for any object-data-bearing source).
   interface LoadedMapSource {
     kind: 'map';
     key: string;
-    spec: Extract<SourceSpec, { kind: 'map' }>;
-    data: MapData;
+    spec: Extract<SourceSpec, { kind: 'map' | 'w3o' }>;
+    data: ObjectDataSource;
     index: Map<string, SourceEntry[]>;
     standardMods: number;
   }
@@ -190,8 +205,8 @@ export function port(options: PortOptions): PortResult {
   type LoadedSource = LoadedMapSource | LoadedFolderSource;
 
   const sources: LoadedSource[] = specs.map((spec, i) => {
-    if (spec.kind === 'map') {
-      const data = new MapData(spec.path);
+    if (spec.kind === 'map' || spec.kind === 'w3o') {
+      const data: ObjectDataSource = spec.kind === 'w3o' ? new W3oData(spec.path) : new MapData(spec.path);
       warnings.push(...data.warnings);
       const index = new Map<string, SourceEntry[]>();
       let standardMods = 0;

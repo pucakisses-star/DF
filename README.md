@@ -54,11 +54,15 @@ Applying the drop takes ~30 seconds in the World Editor:
 Node.js):
 
 - **Add any number of sources**: maps/campaigns to take existing custom
-  objects from, and plain **asset folders** (e.g. unzipped Hive Workshop
-  downloads) to turn a downloaded model into a brand-new unit, item, doodad
-  or destructible — name, base object and icon included, textures re-pathed
-  automatically. Or just **drag & drop** maps and folders anywhere in the
-  window — they load one after another (drop onto the Target card to set the
+  objects from, **object-data exports (`.w3o`)** made with the Object
+  Editor's *Export All Object Settings* (their models and icons resolve
+  automatically from the folder the `.w3o` sits in), and plain **asset
+  folders** (e.g. unzipped Hive Workshop downloads) to turn a downloaded
+  model into a brand-new unit, item, doodad or destructible — name, base
+  object and icon included, textures re-pathed automatically. A dropped
+  folder that ships its own `.w3o` loads that export's objects directly. Or
+  just **drag & drop** maps, exports and folders anywhere in the window —
+  they load one after another (drop onto the Target card to set the
   target).
 - **Built-in 3D model preview with details**: click any object and its model
   renders in a WebGL viewer with animations (drag to rotate, scroll to zoom),
@@ -122,6 +126,11 @@ node dist/cli.js port --source MySource.w3x --target MyMap.w3x \
 
 # Port from several maps at once (collisions fixed across all of them)
 node dist/cli.js port -s MapA.w3x -s MapB.w3x --target MyMap.w3x \
+    --out drop/ --all
+
+# Port from an Object Editor export (.w3o); models/icons referenced by its
+# objects are picked up from the folder the export lives in
+node dist/cli.js port -s HiveBundle/export.w3o --target MyMap.w3x \
     --out drop/ --all
 ```
 

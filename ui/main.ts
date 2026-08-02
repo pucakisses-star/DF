@@ -49,6 +49,7 @@ ipcMain.handle('pick-map', async (_event, title: string) => {
     properties: ['openFile'],
     filters: [
       { name: 'Warcraft III maps & campaigns', extensions: ['w3x', 'w3m', 'w3n'] },
+      { name: 'Object data exports (.w3o)', extensions: ['w3o'] },
       { name: 'All files', extensions: ['*'] },
     ],
   });
@@ -84,6 +85,7 @@ ipcMain.handle('inspect-folder', (_event, path: string, recursive?: boolean) =>
       name: folder.name,
       models: folder.filesWithExtension('.mdx', '.mdl'),
       icons: folder.filesWithExtension('.blp', '.dds', '.tga', '.jpg'),
+      objectData: folder.filesWithExtension('.w3o'),
       defaults: {
         units: folderObjectDefaults('units'),
         items: folderObjectDefaults('items'),
@@ -126,6 +128,9 @@ ipcMain.handle('classify-path', (_event, path: string) => {
     }
     if (stats.isFile() && /\.(mdx|mdl)$/i.test(path)) {
       return { kind: 'model' as const, path };
+    }
+    if (stats.isFile() && /\.w3o$/i.test(path)) {
+      return { kind: 'w3o' as const, path };
     }
     if (stats.isFile() && /\.wc3port$/i.test(path)) {
       return { kind: 'project' as const, path };

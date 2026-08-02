@@ -8,6 +8,7 @@ import { join } from 'path';
 import Texture from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/texture';
 import Sequence from 'mdx-m3-viewer/dist/cjs/parsers/mdlx/sequence';
 import { MdlxModel, Modification, MpqArchive, ObjectDataFile, W3Object } from '../src/formats';
+import { saveW3o } from '../src/w3o';
 
 export function makeObject(
   oldId: string,
@@ -141,6 +142,42 @@ export function writeSourceMap(dir: string): SourceFixture {
   const path = join(dir, 'source.w3x');
   writeFileSync(path, bytes);
   return { path, modelBytes };
+}
+
+/**
+ * An Object Editor export dropped inside an asset folder, the way Hive bundles
+ * ship them: export.w3o next to the model and texture its objects reference.
+ *
+ *   unit h000 (base hfoo): literal name, model "CustomKnight.mdl" (.mdx on
+ *                          disk — tests the extension swap), ability A000
+ *   ability A000 (base AHbz): leveled duration (tests optional ints)
+ */
+export function writeW3oExportFolder(dir: string): string {
+  const w3u = new ObjectDataFile(false);
+  w3u.version = 2;
+  w3u.customTable.objects.push(
+    makeObject('hfoo', 'h000', [
+      { id: 'unam', type: 3, value: 'Exported Knight' },
+      { id: 'umdl', type: 3, value: 'CustomKnight.mdl' },
+      { id: 'uabi', type: 3, value: 'A000' },
+    ]),
+  );
+
+  const w3a = new ObjectDataFile(true);
+  w3a.version = 2;
+  w3a.customTable.objects.push(
+    makeObject('AHbz', 'A000', [
+      { id: 'anam', type: 3, value: 'Exported Blizzard' },
+      { id: 'ahdu', type: 2, value: 5, level: 1 },
+    ]),
+  );
+
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'export.w3o');
+  writeFileSync(path, saveW3o({ units: w3u, abilities: w3a }));
+  writeFileSync(join(dir, 'CustomKnight.mdx'), makeModel('CustomKnight', ['Knight.blp']));
+  writeFileSync(join(dir, 'Knight.blp'), new TextEncoder().encode('fake-export-blp'));
+  return path;
 }
 
 /** Target map that already owns rawcodes h000 and h001. */

@@ -7,6 +7,7 @@ export * from './ids';
 export * from './safety';
 export * from './manifest';
 export * from './mapdata';
+export * from './w3odata';
 export * from './assets';
 export * from './porter';
 export * from './inspect';

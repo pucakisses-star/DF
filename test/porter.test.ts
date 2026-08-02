@@ -7,7 +7,8 @@ import { loadW3o } from '../src/w3o';
 import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
 import { port } from '../src/porter';
-import { makeModel, makeObject, writeSourceMap, writeTargetMap } from './fixtures';
+import { makeModel, makeObject, writeSourceMap, writeTargetMap, writeW3oExportFolder } from './fixtures';
+import { W3oData } from '../src/w3odata';
 import { FolderData } from '../src/source';
 import { prettifyName, suggestIcon, suggestName, suggestObjectFromModel } from '../src/folderobjects';
 
@@ -335,6 +336,74 @@ describe('folder sources (Hive downloads)', () => {
         outDir: join(dir, 'drop-folder2'),
       }),
     ).toThrow(/model 'nope.mdx' not found/);
+  });
+});
+
+describe('w3o object-export sources', () => {
+  let exportPath: string;
+
+  beforeAll(() => {
+    exportPath = writeW3oExportFolder(join(dir, 'HiveBundle'));
+  });
+
+  it('loads and roundtrip-verifies an export, resolving assets from its folder', () => {
+    const data = new W3oData(exportPath);
+    expect(data.cosmetic).toBe(false); // fixture bytes come from the same serializer
+    expect([...data.categories.keys()].sort()).toEqual(['abilities', 'units']);
+    expect(data.customIds()).toEqual(new Set(['h000', 'A000']));
+    expect(data.hasFile('CustomKnight.mdx')).toBe(true); // sibling file, not in the .w3o
+    expect(data.hasFile('Knight.blp')).toBe(true);
+  });
+
+  it('inspects an export like a map', () => {
+    const result = inspect(exportPath);
+    expect(result.isObjectExport).toBe(true);
+    expect(result.objects).toHaveLength(2);
+    const h000 = result.objects.find((o) => o.id === 'h000')!;
+    expect(h000.name).toBe('Exported Knight');
+    expect(h000.modelPath).toBe('CustomKnight.mdl');
+    expect(h000.refs.some((r) => r.field === 'uabi' && r.values.some((v) => v.id === 'A000' && v.custom))).toBe(true);
+  });
+
+  it('ports from an export with closure, remapping, and folder-resolved assets', () => {
+    const result = port({
+      sources: [{ kind: 'w3o', path: exportPath, all: true }],
+      targetPath,
+      outDir: join(dir, 'drop-w3o'),
+    });
+
+    // h000 collides with the target and gets remapped; A000 is free and kept.
+    const unit = result.objects.find((o) => o.sourceId === 'h000')!;
+    expect(unit.remapped).toBe(true);
+    const ability = result.objects.find((o) => o.sourceId === 'A000')!;
+    expect(ability.remapped).toBe(false);
+
+    const { files } = loadW3o(readFileSync(result.w3oPath));
+    expect(files.units!.version).toBe(2);
+    const mods = Object.fromEntries(files.units!.customTable.objects[0].modifications.map((m) => [m.id, m.value]));
+    // The .mdl reference resolved to the .mdx sitting next to the export.
+    expect(mods['umdl']).toBe('war3mapImported\\CustomKnight.mdx');
+    expect(mods['uabi']).toBe('A000');
+
+    // Model collected from the folder, texture path patched.
+    const model = new MdlxModel();
+    model.load(new Uint8Array(readFileSync(join(result.outDir, 'war3mapImported/CustomKnight.mdx'))));
+    expect(model.textures[0].path).toBe('war3mapImported\\Knight.blp');
+    expect(existsSync(join(result.outDir, 'war3mapImported/Knight.blp'))).toBe(true);
+  });
+
+  it('rejects a damaged export instead of misreading it', () => {
+    const bytes = readFileSync(exportPath);
+    const broken = join(dir, 'broken.w3o');
+    writeFileSync(broken, bytes.slice(0, bytes.byteLength - 5));
+    expect(() => new W3oData(broken)).toThrow(PorterError);
+    expect(() => new W3oData(broken)).toThrow(/failed to parse/);
+  });
+
+  it('refuses a .w3o as target', () => {
+    expect(() =>
+      port({ sources: [{ kind: 'w3o', path: exportPath, all: true }], targetPath: exportPath, outDir: join(dir, 'x') }),
+    ).toThrow(/source, not a target/);
   });
 });
 

@@ -16,7 +16,7 @@ import {
   War3MapWts,
 } from './formats';
 import { parseVerified, RoundtripResult } from './safety';
-import { AssetSource } from './source';
+import { ObjectDataSource } from './source';
 
 export interface LoadedCategory {
   def: CategoryDef;
@@ -26,7 +26,7 @@ export interface LoadedCategory {
   roundtrip: RoundtripResult;
 }
 
-export class MapData implements AssetSource {
+export class MapData implements ObjectDataSource {
   readonly path: string;
   readonly name: string;
   readonly map: War3Map;
@@ -132,6 +132,11 @@ export class MapData implements AssetSource {
       return undefined;
     }
     return this.strings.getString(value);
+  }
+
+  /** Number of files imported into the archive (Import Manager entries). */
+  importedFileCount(): number {
+    return this.map.getImportNames().length;
   }
 
   /** Every custom-object rawcode defined in this map, across all categories. */
