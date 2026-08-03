@@ -23,8 +23,9 @@ export function buildReport(result: PortResult, sourceName: string, targetName?:
   lines.push('1. **Back up your map/campaign file.** (The tool never writes to it, but the editor will.)');
   lines.push('2. Open the target in the World Editor.');
   if (result.assets.length > 0) {
+    const importFolder = result.importPrefix.replace(/\\+$/, '');
     lines.push(
-      '3. Open **Module -> Import Manager**, click **File -> Import Files...**, and multi-select everything inside the `war3mapImported/` folder of this drop. Leave the default paths untouched — every reference already points at `war3mapImported\\<file>`.',
+      `3. Open **Module -> Import Manager**, click **File -> Import Files...**, and multi-select everything inside the \`${importFolder}/\` folder of this drop. Leave the default paths untouched — every reference already points at \`${result.importPrefix}<file>\` (the ${importFolder.startsWith('war3camp') ? "campaign editor's" : "map editor's"} default prefix).`,
     );
   } else {
     lines.push('3. (No assets to import.)');

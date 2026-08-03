@@ -31,7 +31,9 @@ Given a source map and a target map, `wc3-porter port`:
    duplicating them.
 4. **Collects and re-paths assets.** Models, icons, textures and sounds
    referenced by the ported objects are pulled out of the source archive and
-   given clean `war3mapImported\<name>` paths. Texture paths *inside* `.mdx`
+   given clean `war3mapImported\<name>` paths (`war3campImported\<name>` when
+   the target is a campaign — matching each editor's default import prefix,
+   so "keep the default paths" just works). Texture paths *inside* `.mdx`
    models are patched to match (with their own roundtrip verification), and
    `_portrait.mdx` companions come along automatically. No manual re-pathing.
 5. **Inlines string references.** `TRIGSTR_nnn` values are resolved against the

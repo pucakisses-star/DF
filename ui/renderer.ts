@@ -73,6 +73,7 @@ interface PortData {
   objects: PortedObject[];
   assets: { importPath: string }[];
   warnings: string[];
+  importPrefix?: string;
 }
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -794,6 +795,7 @@ function buildSourceSpecs(): { specs: unknown[]; error?: string } {
 function renderResults(data: PortData): void {
   const remapped = data.objects.filter((o) => o.remapped);
   const isCampaign = state.targetPath ? state.targetPath.toLowerCase().endsWith('.w3n') : false;
+  const importFolder = (data.importPrefix ?? 'war3mapImported\\').replace(/\\+$/, '');
   let html = `<div class="results">
     <h2 style="color: var(--good); margin: 16px 0 6px;">✓ Import drop built</h2>
     <ul>
@@ -818,7 +820,7 @@ function renderResults(data: PortData): void {
       <ol>
         <li>Back up your ${isCampaign ? 'campaign' : 'map'} file.</li>
         <li>Open it in the World Editor${isCampaign ? ' (Module → Campaign Editor)' : ''}.</li>
-        ${data.assets.length > 0 ? '<li>Import Manager → File → Import Files… → select everything inside the <code>war3mapImported</code> folder of the drop. Keep the default paths.</li>' : ''}
+        ${data.assets.length > 0 ? `<li>Import Manager → File → Import Files… → select everything inside the <code>${escapeHtml(importFolder)}</code> folder of the drop. Keep the default paths.</li>` : ''}
         <li>Object Editor → File → Import Object Settings… → pick <code>import.w3o</code> from the drop.</li>
         <li>Save. Check a couple of the imported objects.</li>
       </ol>
