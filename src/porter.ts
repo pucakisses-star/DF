@@ -31,7 +31,7 @@ import { W3oData } from './w3odata';
 import { FolderData, ObjectDataSource } from './source';
 import { FolderObjectSpec, folderObjectDefaults, synthesizeObject } from './folderobjects';
 import { Manifest, loadManifest, saveManifest } from './manifest';
-import { AssetCollector, ImportPathRegistry, looksLikeAssetPath } from './assets';
+import { AssetCollector, CAMPAIGN_IMPORT_PREFIX, IMPORT_PREFIX, ImportPathRegistry, looksLikeAssetPath } from './assets';
 import { buildReport } from './report';
 
 export type SourceSpec =
@@ -105,6 +105,8 @@ export interface PortResult {
   skippedStandardMods: number;
   reportPath: string;
   manifestPath: string;
+  /** The prefix every asset was re-pathed to (war3mapImported\ or, for campaign targets, war3campImported\). */
+  importPrefix: string;
 }
 
 interface SourceEntry {
@@ -253,7 +255,11 @@ export function port(options: PortOptions): PortResult {
   const ported: PortedObject[] = [];
   const outputObjects = new Map<CategoryKey, W3Object[]>();
   const standardMods = new Map<CategoryKey, W3Object[]>();
-  const registry = new ImportPathRegistry();
+  // Maps and campaigns prefix their Import Manager defaults differently; the
+  // drop's paths must match the target's default or "keep default paths" breaks.
+  const importPrefix =
+    options.targetPath && /\.w3n$/i.test(options.targetPath) ? CAMPAIGN_IMPORT_PREFIX : IMPORT_PREFIX;
+  const registry = new ImportPathRegistry(importPrefix);
   const collectors: AssetCollector[] = [];
   let totalSkippedStandardMods = 0;
 
@@ -601,6 +607,7 @@ export function port(options: PortOptions): PortResult {
     skippedStandardMods: totalSkippedStandardMods,
     reportPath: join(options.outDir, 'report.md'),
     manifestPath,
+    importPrefix,
   };
 
   writeFileSync(

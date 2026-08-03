@@ -202,3 +202,25 @@ export function writeTargetMap(dir: string): string {
   writeFileSync(path, bytes);
   return path;
 }
+
+/** Campaign target (.w3n) that already owns rawcode h000 (campaign-level data). */
+export function writeTargetCampaign(dir: string): string {
+  const w3u = new ObjectDataFile(false);
+  w3u.version = 2;
+  w3u.customTable.objects.push(
+    makeObject('hpea', 'h000', [{ id: 'unam', type: 3, value: 'Existing Campaign Worker' }]),
+  );
+
+  const archive = new MpqArchive();
+  archive.set('war3campaign.w3u', toArrayBuffer(w3u.save()));
+
+  const bytes = archive.save();
+  if (!bytes) {
+    throw new Error('fixture archive save failed');
+  }
+
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'target.w3n');
+  writeFileSync(path, bytes);
+  return path;
+}

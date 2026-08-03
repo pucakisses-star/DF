@@ -7,7 +7,7 @@ import { loadW3o } from '../src/w3o';
 import { MapData } from '../src/mapdata';
 import { inspect } from '../src/inspect';
 import { port } from '../src/porter';
-import { makeModel, makeObject, writeSourceMap, writeTargetMap, writeW3oExportFolder } from './fixtures';
+import { makeModel, makeObject, writeSourceMap, writeTargetCampaign, writeTargetMap, writeW3oExportFolder } from './fixtures';
 import { W3oData } from '../src/w3odata';
 import { FolderData } from '../src/source';
 import { prettifyName, suggestIcon, suggestName, suggestObjectFromModel } from '../src/folderobjects';
@@ -336,6 +336,42 @@ describe('folder sources (Hive downloads)', () => {
         outDir: join(dir, 'drop-folder2'),
       }),
     ).toThrow(/model 'nope.mdx' not found/);
+  });
+});
+
+describe('campaign targets', () => {
+  it('re-paths assets with war3campImported for .w3n targets, migrating the manifest', () => {
+    const campaignTarget = writeTargetCampaign(join(dir, 'camp'));
+    const out = join(dir, 'drop-camp');
+
+    // First run against a MAP target seeds war3mapImported paths in the manifest.
+    const mapRun = port({ sourcePath, targetPath, outDir: out, ids: ['h000'] });
+    expect(mapRun.importPrefix).toBe('war3mapImported\\');
+
+    // Re-running the same drop against a CAMPAIGN target must migrate the
+    // prefix — the campaign Import Manager defaults to war3campImported\.
+    const result = port({ sourcePath, targetPath: campaignTarget, outDir: out, ids: ['h000'] });
+    expect(result.importPrefix).toBe('war3campImported\\');
+    expect(result.assets.map((a) => a.importPath).sort()).toEqual([
+      'war3campImported\\CustomKnight.mdx',
+      'war3campImported\\CustomKnight_portrait.mdx',
+      'war3campImported\\Knight.blp',
+    ]);
+
+    // Object fields and MDX texture paths all use the campaign prefix.
+    const w3o = new War3MapW3o();
+    w3o.load(readFileSync(result.w3oPath));
+    const mods = Object.fromEntries(w3o.units!.customTable.objects[0].modifications.map((m) => [m.id, m.value]));
+    expect(mods['umdl']).toBe('war3campImported\\CustomKnight.mdx');
+    const model = new MdlxModel();
+    model.load(new Uint8Array(readFileSync(join(out, 'war3campImported/CustomKnight.mdx'))));
+    expect(model.textures.map((t) => t.path)).toEqual(['war3campImported\\Knight.blp', '']);
+
+    // The instructions name the right folder.
+    expect(readFileSync(result.reportPath, 'utf8')).toContain('war3campImported');
+
+    // Rawcode collision with the campaign's own h000 still detected.
+    expect(result.objects.find((o) => o.sourceId === 'h000')!.remapped).toBe(true);
   });
 });
 

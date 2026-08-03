@@ -25,7 +25,10 @@ const ASSET_EXTENSIONS = [
   '.slk',
 ];
 
+/** The editor's default import path prefix for maps... */
 export const IMPORT_PREFIX = 'war3mapImported\\';
+/** ...and for campaigns — their Import Manager prefixes differently. */
+export const CAMPAIGN_IMPORT_PREFIX = 'war3campImported\\';
 
 export function looksLikeAssetPath(value: string): boolean {
   const lower = value.toLowerCase().trim();
@@ -48,6 +51,9 @@ export interface CollectedAsset {
 export class ImportPathRegistry {
   private used = new Set<string>();
 
+  /** All allocated paths start with this (map or campaign import prefix). */
+  constructor(readonly prefix: string = IMPORT_PREFIX) {}
+
   claim(importPath: string): void {
     this.used.add(importPath.toLowerCase());
   }
@@ -63,7 +69,7 @@ export class ImportPathRegistry {
     const stem = dot > 0 ? base.slice(0, dot) : base;
     const ext = dot > 0 ? base.slice(dot) : '';
     for (let i = 0; ; i++) {
-      const candidate = IMPORT_PREFIX + (i === 0 ? base : `${stem}_${i}${ext}`);
+      const candidate = this.prefix + (i === 0 ? base : `${stem}_${i}${ext}`);
       if (this.isFree(candidate)) {
         this.claim(candidate);
         return candidate;
@@ -136,9 +142,11 @@ export class AssetCollector {
     }
 
     let importPath = this.manifest.assetMap[this.manifestKey(norm)];
-    if (importPath) {
+    if (importPath && importPath.toLowerCase().startsWith(this.registry.prefix.toLowerCase())) {
       this.registry.claim(importPath);
     } else {
+      // No stored path — or it was built for the other target kind (maps use
+      // war3mapImported, campaigns war3campImported), so migrate it.
       importPath = this.registry.allocate(path);
       this.manifest.assetMap[this.manifestKey(norm)] = importPath;
     }
