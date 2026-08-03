@@ -542,6 +542,12 @@ export function port(options: PortOptions): PortResult {
   const EMIT_VERSION = 2;
   let droppedUnk = 0;
 
+  // Field ids are 4 printable-ASCII characters. Source maps occasionally carry
+  // junk modifications whose id contains control bytes (e.g. "Crs\0"); the
+  // editor's Import Object Settings has been observed to crash on them, so
+  // they are dropped — loudly — instead of shipped.
+  const isValidFieldId = (id: string) => /^[\x20-\x7e]{4}$/.test(id);
+
   const w3oFiles: W3oFiles = {};
   for (const def of CATEGORIES) {
     const custom = outputObjects.get(def.key) ?? [];
@@ -553,6 +559,16 @@ export function port(options: PortOptions): PortResult {
       if (obj.unk.length > 0) {
         droppedUnk += obj.unk.length;
         obj.unk = []; // not representable in v2; safe to drop (editor regenerates it)
+      }
+      const malformed = obj.modifications.filter((m) => !isValidFieldId(m.id));
+      if (malformed.length > 0) {
+        obj.modifications = obj.modifications.filter((m) => isValidFieldId(m.id));
+        for (const mod of malformed) {
+          warnings.push(
+            `${def.key} '${obj.newId}': dropped a modification with a malformed field id (${JSON.stringify(mod.id)}, value ${JSON.stringify(String(mod.value).slice(0, 40))}) — ` +
+              `corrupt leftover data in the source that crashes the World Editor's import.`,
+          );
+        }
       }
     }
     const file = newObjectFile(def);

@@ -339,6 +339,34 @@ describe('folder sources (Hive downloads)', () => {
   });
 });
 
+describe('malformed field ids', () => {
+  it('drops modifications whose field id contains control bytes, with a warning', () => {
+    const w3u = new ObjectDataFile(false);
+    w3u.version = 2;
+    const unit = makeObject('hfoo', 'h500', [
+      { id: 'unam', type: 3, value: 'Corrupt Fields Unit' },
+      { id: 'Crs\0', type: 2, value: 0.25 },
+      { id: 'uhpm', type: 0, value: 750 },
+    ]);
+    w3u.customTable.objects.push(unit);
+
+    const archive = new MpqArchive();
+    archive.set('war3map.w3u', w3u.save().slice().buffer as ArrayBuffer);
+    const path = join(dir, 'corrupt-field.w3x');
+    writeFileSync(path, archive.save()!);
+
+    // The roundtrip gate still accepts the source (the bytes are consistent) —
+    // the junk is only removed from what WE ship to the editor.
+    const result = port({ sourcePath: path, targetPath, outDir: join(dir, 'drop-corrupt'), all: true });
+    expect(result.warnings.some((w) => w.includes('malformed field id'))).toBe(true);
+
+    const { files } = loadW3o(readFileSync(result.w3oPath));
+    const mods = files.units!.customTable.objects[0].modifications;
+    expect(mods.map((m) => m.id).sort()).toEqual(['uhpm', 'unam']);
+    expect(mods.find((m) => m.id === 'uhpm')!.value).toBe(750);
+  });
+});
+
 describe('campaign targets', () => {
   it('re-paths assets with war3campImported for .w3n targets, migrating the manifest', () => {
     const campaignTarget = writeTargetCampaign(join(dir, 'camp'));
